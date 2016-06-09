@@ -8,7 +8,8 @@ import copy
 from ....extern.six.moves import cStringIO as StringIO
 from ... import ascii
 from .... import table
-from ....tests.helper import pytest
+from ....tests.helper import pytest, catch_warnings
+from ....utils.exceptions import AstropyWarning, AstropyDeprecationWarning
 from .... import units
 
 from .common import setup_function, teardown_function
@@ -98,7 +99,7 @@ ID & XCENTER & YCENTER & MAG & MERR & MSKY & NITER & SHARPNESS & CHI & PIER & PE
 \\tablehead{\\colhead{ID} & \\colhead{XCENTER} & \\colhead{YCENTER} & \\colhead{MAG} & \\colhead{MERR} & \\colhead{MSKY} & \\colhead{NITER} & \\colhead{SHARPNESS} & \\colhead{CHI} & \\colhead{PIER} & \\colhead{PERROR}\\\\ \\colhead{ } & \\colhead{pixels} & \\colhead{pixels} & \\colhead{magnitudes} & \\colhead{magnitudes} & \\colhead{counts} & \\colhead{ } & \\colhead{ } & \\colhead{ } & \\colhead{ } & \\colhead{perrors}}
 \\startdata
 14 & 138.538 & 256.405 & 15.461 & 0.003 & 34.85955 & 4 & -0.032 & 0.802 & 0 & No_error \\\\
-18 & 18.114 & 280.170 & 22.329 & 0.206 & 30.12784 & 4 & -2.544 & 1.104 & 0 & No_error \\\\
+18 & 18.114 & 280.170 & 22.329 & 0.206 & 30.12784 & 4 & -2.544 & 1.104 & 0 & No_error
 \\enddata
 \\end{deluxetable}
 """
@@ -113,7 +114,7 @@ ID & XCENTER & YCENTER & MAG & MERR & MSKY & NITER & SHARPNESS & CHI & PIER & PE
 \\tablehead{\\colhead{ID} & \\colhead{XCENTER} & \\colhead{YCENTER} & \\colhead{MAG} & \\colhead{MERR} & \\colhead{MSKY} & \\colhead{NITER} & \\colhead{SHARPNESS} & \\colhead{CHI} & \\colhead{PIER} & \\colhead{PERROR}\\\\ \\colhead{ } & \\colhead{[pixel]} & \\colhead{pixels} & \\colhead{[mag]} & \\colhead{magnitudes} & \\colhead{counts} & \\colhead{ } & \\colhead{ } & \\colhead{ } & \\colhead{ } & \\colhead{perrors}}
 \\startdata
 14 & 138.538 & 256.405 & 15.461 & 0.003 & 34.85955 & 4 & -0.032 & 0.802 & 0 & No_error \\\\
-18 & 18.114 & 280.170 & 22.329 & 0.206 & 30.12784 & 4 & -2.544 & 1.104 & 0 & No_error \\\\
+18 & 18.114 & 280.170 & 22.329 & 0.206 & 30.12784 & 4 & -2.544 & 1.104 & 0 & No_error
 \\enddata
 \\end{deluxetable*}
 """
@@ -376,7 +377,7 @@ def check_write_table(test_def, table, fast_writer):
     try:
         ascii.write(table, out, fast_writer=fast_writer, **test_def['kwargs'])
     except ValueError as e: # if format doesn't have a fast writer, ignore
-        if not 'not in the list of formats with fast writers' in str(e):
+        if 'not in the list of formats with fast writers' not in str(e):
             raise e
         return
     print('Expected:\n%s' % test_def['out'])
@@ -398,7 +399,7 @@ def check_write_table_via_table(test_def, table, fast_writer):
     try:
         table.write(out, format=format,  fast_writer=fast_writer, **test_def['kwargs'])
     except ValueError as e: # if format doesn't have a fast writer, ignore
-        if not 'not in the list of formats with fast writers' in str(e):
+        if 'not in the list of formats with fast writers' not in str(e):
             raise e
         return
     print('Expected:\n%s' % test_def['out'])
@@ -469,6 +470,17 @@ def test_write_comments(fast_writer):
     assert out.getvalue().splitlines() == expected
 
 @pytest.mark.parametrize("fast_writer", [True, False])
+@pytest.mark.parametrize("fmt", ['%0.1f', '.1f', '0.1f', '{0:0.1f}'])
+def test_write_format(fast_writer, fmt):
+    """Check different formats for a column."""
+    data = ascii.read('#c1\n  # c2\t\na,b,c\n#  c3\n1.11,2.22,3.33')
+    out = StringIO()
+    expected = ['# c1', '# c2', '# c3', 'a b c', '1.1 2.22 3.33']
+    data['a'].format = fmt
+    ascii.write(data, out, format='basic', fast_writer=fast_writer)
+    assert out.getvalue().splitlines() == expected
+
+@pytest.mark.parametrize("fast_writer", [True, False])
 def test_strip_names(fast_writer):
     """Names should be stripped of whitespace by default."""
     data = table.Table([[1], [2], [3]], names=(' A', 'B ', ' C '))
@@ -493,7 +505,7 @@ def test_latex_units():
 \\tablehead{\\colhead{date} & \\colhead{NUV exp.time}\\\\ \\colhead{ } & \\colhead{s}}
 \\startdata
 a & 1 \\\\
-b & 2 \\\\
+b & 2
 \\enddata
 \\end{table}
 '''.replace('\n', os.linesep)
@@ -522,3 +534,106 @@ def test_commented_header_comments(fast_writer):
         ascii.write(t, out, format='commented_header', comment=False,
                     fast_writer=fast_writer)
     assert "for the commented_header writer you must supply a string" in str(err.value)
+
+
+@pytest.mark.parametrize("fast_writer", [True, False])
+def test_byte_string_output(fast_writer):
+    """
+    Test the fix for #4350 where byte strings were output with a
+    leading `b` on Py3.
+    """
+    t = table.Table([['Hello', 'World']], dtype=['S10'])
+    out = StringIO()
+    ascii.write(t, out, fast_writer=fast_writer)
+    assert out.getvalue().splitlines() == ['col0', 'Hello', 'World']
+
+
+@pytest.mark.parametrize('names, include_names, exclude_names, formats, issues_warning', [
+    (['x', 'y'], ['x', 'y'], ['x'], {'x':'%d', 'y':'%f'}, True),
+    (['x', 'y'], ['x', 'y'], ['y'], {'x':'%d'}, False),
+    (['x', 'y'], ['x', 'y'], [], {'p':'%d', 'q':'%f'}, True),
+    (['x', 'y'], ['x', 'y'], [], {'z':'%f'}, True),
+    (['x', 'y'], ['x', 'y'], [], {'x':'%d'}, False),
+    (['x', 'y'], ['x', 'y'], [], {'p':'%d', 'y':'%f'}, True),
+    (['x', 'y'], ['x', 'y'], [], {}, False)
+])
+def test_names_with_formats(names, include_names, exclude_names, formats, issues_warning):
+    """Test the fix for #4508 where i set the test cases in base of issues_warning
+    if issues_warning value is true means warning accure otherwise issues_warning
+    value false.Check that columns of include_names are same with colomns of
+    exclude_names and Check that columns  in formats specifier exist in the
+    issues_warning table when writing.
+    """
+    t = table.Table([[1,2,3],[4.1,5.2,6.3]])
+    with catch_warnings(AstropyWarning) as ASwarn:
+        out = StringIO()
+        ascii.write(t, out, names=names, include_names=include_names,
+        exclude_names=exclude_names, formats=formats)
+    assert (issues_warning == (len(ASwarn) == 1))
+
+
+@pytest.mark.parametrize('formats, issues_warning', [
+    ({'p':'%d', 'y':'%f'}, True),
+    ({'x':'%d', 'y':'%f'}, True),
+    ({'z':'%f'}, True),
+    ({}, False)
+])
+def test_columns_names_with_formats(formats, issues_warning):
+    """Test the fix for #4508 where i set the test cases in base of issues_warning
+    if issues_warning value is true means warning accure otherwise issues_warning
+    value false and Check that columns in formats specifier exist in the
+    issues_warning table when writing.
+    """
+    t = table.Table([[1,2,3],[4.1,5.2,6.3]])
+    with catch_warnings(AstropyWarning) as ASwarn:
+        out = StringIO()
+        ascii.write(t, out,formats=formats)
+    assert (issues_warning == (len(ASwarn) == 1))
+
+@pytest.mark.parametrize("fast_writer", [True, False])
+def test_write_quoted_empty_field(fast_writer):
+    """
+    Test the fix for #4350 where byte strings were output with a
+    leading `b` on Py3.
+    """
+    t = table.Table([['Hello', ''], ['', '']], dtype=['S10', 'S10'])
+    out = StringIO()
+    ascii.write(t, out, fast_writer=fast_writer)
+    assert out.getvalue().splitlines() == ['col0 col1', 'Hello ""', '"" ""']
+
+    out = StringIO()
+    ascii.write(t, out, fast_writer=fast_writer, delimiter=',')
+    assert out.getvalue().splitlines() == ['col0,col1', 'Hello,', ',']
+
+@pytest.mark.parametrize("format", ['ascii', 'csv', 'html', 'latex',
+                                    'ascii.fixed_width', 'html'])
+@pytest.mark.parametrize("fast_writer", [True, False])
+def test_write_overwrite_ascii(format, fast_writer, tmpdir):
+    """Test overwrite argument for various ASCII writers"""
+    filename = tmpdir.join("table-tmp.dat").strpath
+    open(filename, 'w').close()
+    t = table.Table([['Hello', ''], ['', '']], dtype=['S10', 'S10'])
+
+    with pytest.raises(IOError) as err:
+        t.write(filename, overwrite=False, format=format,
+                fast_writer=fast_writer)
+    assert str(err.value).endswith('already exists')
+
+    with catch_warnings(AstropyDeprecationWarning) as warning:
+        t.write(filename, format=format, fast_writer=fast_writer)
+    assert len(warning) == 1
+    assert str(warning[0].message).endswith(
+        "Automatically overwriting ASCII files is deprecated. "
+        "Use the argument 'overwrite=True' in the future.")
+
+    t.write(filename, overwrite=True, format=format,
+            fast_writer=fast_writer)
+
+    # If the output is a file object, overwrite is ignored
+    with open(filename, 'w') as fp:
+        t.write(fp, format=format,
+                fast_writer=fast_writer)
+        t.write(fp, overwrite=False, format=format,
+                fast_writer=fast_writer)
+        t.write(fp, overwrite=True, format=format,
+                fast_writer=fast_writer)

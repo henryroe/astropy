@@ -8,7 +8,6 @@ Compare the results of some models with other programs.
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
-import types
 
 try:
     import cPickle as pickle
@@ -20,133 +19,17 @@ import numpy as np
 from numpy.testing import utils
 
 from .example_models import models_1D, models_2D
-from .. import (fitting, models, LabeledInput, SerialCompositeModel,
-                SummedCompositeModel)
-from ..core import FittableModel, render_model
+from .. import fitting, models
+from ..core import FittableModel
 from ..polynomial import PolynomialBase
 from ...tests.helper import pytest
 
-from ...extern import six
 
 try:
     from scipy import optimize  # pylint: disable=W0611
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
-
-
-class TestSerialComposite(object):
-    """
-    Test composite models evaluation in series
-    """
-    def setup_class(self):
-        self.y, self.x = np.mgrid[:5, :5]
-        self.p1 = models.Polynomial1D(3)
-        self.p11 = models.Polynomial1D(3)
-        self.p2 = models.Polynomial2D(3)
-
-    def test_single_array_input(self):
-        model = SerialCompositeModel([self.p1, self.p11])
-        result = model(self.x)
-        xx = self.p11(self.p1(self.x))
-        utils.assert_almost_equal(xx, result)
-
-    def test_labeledinput_1(self):
-        labeled_input = LabeledInput([self.x, self.y], ['x', 'y'])
-        model = SerialCompositeModel([self.p2, self.p1],
-                                     [['x', 'y'], ['z']],
-                                     [['z'], ['z']])
-        result = model(labeled_input)
-        z = self.p2(self.x, self.y)
-        z1 = self.p1(z)
-        utils.assert_almost_equal(z1, result.z)
-
-    def test_labeledinput_2(self):
-        labeled_input = LabeledInput([self.x, self.y], ['x', 'y'])
-        rot = models.Rotation2D(angle=23.4)
-        offx = models.Shift(-2)
-        offy = models.Shift(1.2)
-        model = SerialCompositeModel([rot, offx, offy],
-                                     [['x', 'y'], ['x'], ['y']],
-                                     [['x', 'y'], ['x'], ['y']])
-        result = model(labeled_input)
-        x, y = rot(self.x, self.y)
-        x = offx(x)
-        y = offy(y)
-        utils.assert_almost_equal(x, result.x)
-        utils.assert_almost_equal(y, result.y)
-
-    def test_labeledinput_3(self):
-        labeled_input = LabeledInput([2, 4.5], ['x', 'y'])
-        rot = models.Rotation2D(angle=23.4)
-        offx = models.Shift(-2)
-        offy = models.Shift(1.2)
-        model = SerialCompositeModel([rot, offx, offy],
-                                     [['x', 'y'], ['x'], ['y']],
-                                     [['x', 'y'], ['x'], ['y']])
-        result = model(labeled_input)
-        x, y = rot(2, 4.5)
-        x = offx(x)
-        y = offy(y)
-        utils.assert_almost_equal(x, result.x)
-        utils.assert_almost_equal(y, result.y)
-
-    def test_multiple_input(self):
-        rot = models.Rotation2D(angle=-60)
-        model = SerialCompositeModel([rot, rot])
-        xx, yy = model(self.x, self.y)
-        x1, y1 = model.inverse(xx, yy)
-        utils.assert_almost_equal(x1, self.x)
-        utils.assert_almost_equal(y1, self.y)
-
-
-class TestSummedComposite(object):
-    """Test legacy composite models evaluation."""
-
-    def setup_class(self):
-        self.x = np.linspace(1, 10, 100)
-        self.y = np.linspace(1, 10, 100)
-        self.p1 = models.Polynomial1D(3)
-        self.p11 = models.Polynomial1D(3)
-        self.p2 = models.Polynomial2D(3)
-        self.p1.parameters = [1.4, 2.2, 3.1, 4]
-        self.p2.c0_0 = 100
-
-    def test_single_array_input(self):
-        model = SummedCompositeModel([self.p1, self.p11])
-        result = model(self.x)
-        delta11 = self.p11(self.x)
-        delta1 = self.p1(self.x)
-        xx = delta1 + delta11
-        utils.assert_almost_equal(xx, result)
-
-    def test_labeledinput(self):
-        labeled_input = LabeledInput([self.x, self.y], ['x', 'y'])
-        model = SummedCompositeModel([self.p1, self.p11], inmap=['x'],
-                                     outmap=['x'])
-        result = model(labeled_input)
-        delta11 = self.p11(self.x)
-        delta1 = self.p1(self.x)
-        xx = delta1 + delta11
-        utils.assert_almost_equal(xx, result.x)
-
-    def test_inputs_outputs_mismatch(self):
-        p2 = models.Polynomial2D(1)
-        ch2 = models.Chebyshev2D(1, 1)
-        with pytest.raises(ValueError):
-            SummedCompositeModel([p2, ch2])
-
-
-def test_pickle():
-    p1 = models.Polynomial1D(3)
-    p11 = models.Polynomial1D(4)
-    g1 = models.Gaussian1D(10.3, 5.4, 1.2)
-    serial_composite_model = SerialCompositeModel([p1, g1])
-    parallel_composite_model = SummedCompositeModel([serial_composite_model,
-                                                     p11])
-    s = pickle.dumps(parallel_composite_model)
-    s1 = pickle.loads(s)
-    assert s1(3) == parallel_composite_model(3)
 
 
 @pytest.mark.skipif('not HAS_SCIPY')
@@ -167,7 +50,7 @@ def test_custom_model(amplitude=4, frequency=1):
         df = 2 * np.pi * x * amplitude * np.cos(2 * np.pi * frequency * x)
         return np.vstack((da, df))
 
-    SineModel = models.custom_model_1d(sine_model, func_fit_deriv=sine_deriv)
+    SineModel = models.custom_model(sine_model, fit_deriv=sine_deriv)
 
     x = np.linspace(0, 4, 50)
     sin_model = SineModel()
@@ -184,7 +67,7 @@ def test_custom_model(amplitude=4, frequency=1):
 
 
 def test_custom_model_init():
-    @models.custom_model_1d
+    @models.custom_model
     def SineModel(x, amplitude=4, frequency=1):
         """Model function"""
 
@@ -196,7 +79,7 @@ def test_custom_model_init():
 
 
 def test_custom_model_defaults():
-    @models.custom_model_1d
+    @models.custom_model
     def SineModel(x, amplitude=4, frequency=1):
         """Model function"""
 
@@ -213,43 +96,35 @@ def test_custom_model_defaults():
 def test_custom_model_bounding_box():
     """Test bounding box evaluation for a 3D model"""
 
-    def ellipsoid(x, y, z, x0=13., y0=10., z0=8., a=4., b=3., c=2., amp=1.):
+    def ellipsoid(x, y, z, x0=13, y0=10, z0=8, a=4, b=3, c=2, amp=1):
         rsq = ((x - x0) / a) ** 2 + ((y - y0) / b) ** 2 + ((z - z0) / c) ** 2
         val = (rsq < 1) * amp
         return val
 
-    def ellipsoid_bbox(self):
-        return ((self.z0 - self.c, self.z0 + self.c),
-                (self.y0 - self.b, self.y0 + self.b),
-                (self.x0 - self.a, self.x0 + self.a))
-
-    Ellipsoid3D = models.custom_model(ellipsoid)
-    Ellipsoid3D.bounding_box_default = ellipsoid_bbox
+    class Ellipsoid3D(models.custom_model(ellipsoid)):
+        @property
+        def bounding_box(self):
+            return ((self.z0 - self.c, self.z0 + self.c),
+                    (self.y0 - self.b, self.y0 + self.b),
+                    (self.x0 - self.a, self.x0 + self.a))
 
     model = Ellipsoid3D()
-    model.bounding_box = 'auto'
     bbox = model.bounding_box
-    if bbox is None:
-        pytest.skip("Bounding_box is not defined for model.")
 
-    # Check for exact agreement within bounded region
     zlim, ylim, xlim = bbox
-    dx = np.ceil((xlim[1] - xlim[0]) / 2)
-    dy = np.ceil((ylim[1] - ylim[0]) / 2)
-    dz = np.ceil((zlim[1] - zlim[0]) / 2)
-    z0, y0, x0 = np.mean(bbox, axis=1).astype(int)
-    z, y, x = np.mgrid[z0 - dz: z0 + dz + 1, y0 - dy:
-                                y0 + dy + 1, x0 - dx: x0 + dx + 1]
+    dz, dy, dx = np.diff(bbox) / 2
+    z1, y1, x1 = np.mgrid[slice(zlim[0], zlim[1] + 1),
+                          slice(ylim[0], ylim[1] + 1),
+                          slice(xlim[0], xlim[1] + 1)]
+    z2, y2, x2 = np.mgrid[slice(zlim[0] - dz, zlim[1] + dz + 1),
+                          slice(ylim[0] - dy, ylim[1] + dy + 1),
+                          slice(xlim[0] - dx, xlim[1] + dx + 1)]
 
-    expected = model(x, y, z)
-    actual = render_model(model)
+    arr = model(x2, y2, z2)
+    sub_arr = model(x1, y1, z1)
 
-    utils.assert_allclose(actual, expected, rtol=0, atol=0)
-
-    # check result with no bounding box defined
-    model.bounding_box = None
-    actual = render_model(model, coords=[z,y,x])
-    utils.assert_allclose(actual, expected, rtol=0, atol=0)
+    # check for flux agreement
+    assert abs(arr.sum() - sub_arr.sum()) < arr.sum() * 1e-7
 
 
 class Fittable2DModelTester(object):
@@ -297,27 +172,37 @@ class Fittable2DModelTester(object):
 
         model = create_model(model_class, test_parameters)
 
-        bbox = model.bounding_box
-        if bbox is None:
+        # testing setter
+        model.bounding_box = ((-5, 5), (-5, 5))
+        assert model.bounding_box == ((-5, 5), (-5, 5))
+
+        model.bounding_box = None
+        with pytest.raises(NotImplementedError):
+            model.bounding_box
+
+        # test the exception of dimensions don't match
+        with pytest.raises(ValueError):
+            model.bounding_box = (-5, 5)
+
+        del model.bounding_box
+
+        try:
+            bbox = model.bounding_box
+        except NotImplementedError:
             pytest.skip("Bounding_box is not defined for model.")
 
-        # Check for exact agreement within bounded region
-        xlim, ylim = bbox
-        dx = np.ceil((xlim[1] - xlim[0]) / 2)
-        dy = np.ceil((ylim[1] - ylim[0]) / 2)
-        x0, y0 = np.mean(bbox, axis=1).astype(int)
-        y, x = np.mgrid[y0 - dy: y0 + dy + 1,
-                        x0 - dx: x0 + dx + 1]
+        ylim, xlim = bbox
+        dy, dx = np.diff(bbox)/2
+        y1, x1 = np.mgrid[slice(ylim[0], ylim[1] + 1),
+                          slice(xlim[0], xlim[1] + 1)]
+        y2, x2 = np.mgrid[slice(ylim[0] - dy, ylim[1] + dy + 1),
+                          slice(xlim[0] - dx, xlim[1] + dx + 1)]
 
-        expected = model(x, y)
-        actual = render_model(model)
+        arr = model(x2, y2)
+        sub_arr = model(x1, y1)
 
-        utils.assert_allclose(actual, expected, rtol=0, atol=0)
-
-        # check result with no bounding box defined
-        model.bounding_box = None
-        actual = render_model(model, coords=[y, x])
-        utils.assert_allclose(actual, expected, rtol=0, atol=0)
+        # check for flux agreement
+        assert abs(arr.sum() - sub_arr.sum()) < arr.sum() * 1e-7
 
     @pytest.mark.skipif('not HAS_SCIPY')
     def test_fitter2D(self, model_class, test_parameters):
@@ -461,24 +346,33 @@ class Fittable1DModelTester(object):
 
         model = create_model(model_class, test_parameters)
 
-        bbox = model.bounding_box
-        if bbox is None:
+        # testing setter
+        model.bounding_box = (-5, 5)
+        model.bounding_box = None
+
+        with pytest.raises(NotImplementedError):
+            model.bounding_box
+
+        del model.bounding_box
+
+        # test exception if dimensions don't match
+        with pytest.raises(ValueError):
+            model.bounding_box = 5
+
+        try:
+            bbox = model.bounding_box
+        except NotImplementedError:
             pytest.skip("Bounding_box is not defined for model.")
 
-        # Check for exact agreement within bounded region
-        dx = np.ceil(np.diff(model.bounding_box)[0] / 2)
-        x0 = int(np.mean(bbox))
-        x = np.mgrid[x0 - dx: x0 + dx + 1]
+        dx = np.diff(bbox) / 2
+        x1 = np.mgrid[slice(bbox[0], bbox[1] + 1)]
+        x2 = np.mgrid[slice(bbox[0] - dx, bbox[1] + dx + 1)]
 
-        expected = model(x)
-        actual = render_model(model)
+        arr = model(x2)
+        sub_arr = model(x1)
 
-        utils.assert_allclose(actual, expected, rtol=0, atol=0)
-
-        # check result with no bounding box defined
-        model.bounding_box = None
-        actual = render_model(model, coords=x)
-        utils.assert_allclose(actual, expected, rtol=0, atol=0)
+        # check for flux agreement
+        assert abs(arr.sum() - sub_arr.sum()) < arr.sum() * 1e-7
 
     @pytest.mark.skipif('not HAS_SCIPY')
     def test_fitter1D(self, model_class, test_parameters):

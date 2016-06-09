@@ -1,3 +1,65 @@
+WCSLIB version 5.14 (2016/02/07)
+--------------------------------
+
+* C library
+
+  - In wcsulex.l and wcsutrn.l, applied a workaround for a memory leak
+    introduced by a change (bug) in flex in Aug/2012.  Reported, and
+    fix supplied by Thomas Robitaille and Erik Bray.
+
+* Installation
+
+  - In MacOSX, create symlink libwcs.dylib pointing to the dynamic
+    library so that WCSLIB is linked dynamically by default.  Requested
+    by Paul Price.
+
+
+WCSLIB version 5.13 (2016/01/26)
+--------------------------------
+
+* C library
+
+  - In wcshdo(), provide floating-point format control via the 'ctrl'
+    argument (formerly 'relax').
+
+  - In wcspih(), PLATEID by itself is no longer sufficient to trigger a
+    DSS translation (reported by James Allen).
+
+  - In unitfix(), ensure that the message buffer cannot be overrun, e.g.
+    by blank-padded unit strings (reported by Vishal Kasliwal).
+
+
+WCSLIB version 5.12 (2015/11/15)
+--------------------------------
+
+* C library
+
+  - Bug fix in wcshdo() for CRVALia precision reported by Mihai Cara.
+
+
+WCSLIB version 5.11 (2015/10/18)
+--------------------------------
+
+* C library
+
+  - Bug fixes in wcspih.l and dis.c for WAT distortions provided by
+    Ole Streicher.
+
+
+WCSLIB version 5.10 (2015/10/09)
+--------------------------------
+
+* C library
+
+  - In wcshdo(), allow output of floating point keyvalues to 15
+    significant digits (was 14), mainly for astropy.
+
+  - In wcspih(), allow unrecognised WAT projection types (tan, etc.) to
+    pass without returning an error.  Reported by Michael Droettboom.
+    Also fixed a bug triggered by SIP keywords in unconventional order,
+    reported by Colin Slater, LSST.
+
+
 WCSLIB version 5.9 (2015/07/21)
 -------------------------------
 
@@ -24,8 +86,9 @@ WCSLIB version 5.8 (2015/07/08)
     wcshdo() to write headers in the form of the distortion function
     used internally (usually TPD).
 
-  - Added the capability, via DPja.DOCORR, for a distortion to be
-    applied as a correction.
+  - Added the capability, via DPja.DOCORR, for a distortion function to
+    to compute an additive correction to the undistorted coordinates
+    (rather than computing the distorted coordinates themselves).
 
   - Added auxiliary variables to TPD via DPja.AUX.jhat.COEFF.m.
 
@@ -2060,7 +2123,7 @@ WCSLIB version 2.9 (2002/04/03)
   - Fixed a bug with alias translation in wcsset().
 
   - Added a conditional compilation directive to lin.c for Apple's
-    MacOS X.
+    MacOSX.
 
 * Fortran library
 
@@ -2490,4 +2553,4 @@ WCSLIB version 1.0 (1995/01/31)
   Initial release.
 
 ------------------------------------------------------------------------
-$Id: CHANGES,v 5.9 2015/07/21 09:20:04 mcalabre Exp $
+$Id: CHANGES,v 5.14 2016/02/07 10:49:33 mcalabre Exp $

@@ -4,8 +4,7 @@ from __future__ import (absolute_import, unicode_literals, division,
                         print_function)
 
 from ..representation import CartesianRepresentation
-from ..baseframe import BaseCoordinateFrame, TimeFrameAttribute, frame_transform_graph
-from ..transformations import FunctionTransform
+from ..baseframe import BaseCoordinateFrame, TimeFrameAttribute
 from .utils import DEFAULT_OBSTIME
 
 
@@ -16,9 +15,6 @@ class ITRS(BaseCoordinateFrame):
     defined by a series of reference locations near the surface of the Earth.
     For more background on the ITRS, see the references provided in the
     :ref:`astropy-coordinates-seealso` section of the documentation.
-
-    Note that this frame does *not* have an ``obstime``, because it is
-    rotating with the Earth.
     """
 
     default_representation = CartesianRepresentation

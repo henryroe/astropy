@@ -6,7 +6,7 @@
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
-from ...extern import six
+from ...extern import six  # pylint: disable=W0611
 from ...extern.six import next
 from ...extern.six.moves import xrange
 
@@ -15,6 +15,7 @@ import locale
 
 from ...tests.helper import pytest
 from .. import console
+from ... import units as u
 
 
 class FakeTTY(io.StringIO):
@@ -207,9 +208,13 @@ def test_human_time(seconds, string):
        (187213, "187k"),
        (3905,   "3.9k"),
        (64,     " 64 "),
-       (2,      "  2 ")]
+       (2,      "  2 "),
+       (10*u.GB,  " 10G")]
 )
 def test_human_file_size(size, string):
     human_time = console.human_file_size(size)
     assert human_time == string
 
+@pytest.mark.parametrize("size", (50*u.km, 100*u.g))
+def test_bad_human_file_size(size):
+    assert pytest.raises(u.UnitConversionError, console.human_file_size, size)

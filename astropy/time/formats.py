@@ -6,7 +6,8 @@ from __future__ import (absolute_import, division, print_function,
 import fnmatch
 import time
 import re
-from datetime import datetime
+import datetime
+from collections import OrderedDict
 
 import numpy as np
 
@@ -14,14 +15,6 @@ from .. import units as u
 from .. import _erfa as erfa
 from ..extern import six
 from .utils import day_frac, two_sum
-from ..utils.compat.odict import OrderedDict
-
-try:
-    # Not guaranteed available at setup time
-    from . import erfa_time
-except ImportError:
-    if not _ASTROPY_SETUP_:
-        raise
 
 
 __all__ = ['TimeFormat', 'TimeJD', 'TimeMJD', 'TimeFromEpoch', 'TimeUnix',
@@ -31,7 +24,8 @@ __all__ = ['TimeFormat', 'TimeJD', 'TimeMJD', 'TimeFromEpoch', 'TimeUnix',
            'TimeEpochDate', 'TimeBesselianEpoch', 'TimeJulianEpoch',
            'TimeDeltaFormat', 'TimeDeltaSec', 'TimeDeltaJD',
            'TimeEpochDateString', 'TimeBesselianEpochString',
-           'TimeJulianEpochString', 'TIME_FORMATS', 'TIME_DELTA_FORMATS']
+           'TimeJulianEpochString', 'TIME_FORMATS', 'TIME_DELTA_FORMATS',
+           'TimezoneInfo']
 
 __doctest_skip__ = ['TimePlotDate']
 
@@ -204,12 +198,18 @@ class TimeFormat(object):
         """
         raise NotImplementedError
 
+    def to_value(self, parent=None):
+        """
+        Return time representation from internal jd1 and jd2.  This is
+        the base method that ignores ``parent`` and requires that
+        subclasses implement the ``value`` property.  Subclasses that
+        require ``parent`` or have other optional args for ``to_value``
+        should compute and return the value directly.
+        """
+        return self.value
+
     @property
     def value(self):
-        """
-        Return time representation from internal jd1 and jd2.  Must be
-        provided by derived classes.
-        """
         raise NotImplementedError
 
 
@@ -280,10 +280,11 @@ class TimeDecimalYear(TimeFormat):
 
         # Possible enhancement: use np.unique to only compute start, stop
         # for unique values of iy_start.
-        jd1_start, jd2_start = erfa_time.dtf_jd(
-            self.scale.upper().encode('utf8'), iy_start, imon, iday, ihr, imin, isec)
-        jd1_end, jd2_end = erfa_time.dtf_jd(
-            self.scale.upper().encode('utf8'), iy_start + 1, imon, iday, ihr, imin, isec)
+        scale = self.scale.upper().encode('ascii')
+        jd1_start, jd2_start = erfa.dtf2d(scale, iy_start, imon, iday,
+                                          ihr, imin, isec)
+        jd1_end, jd2_end = erfa.dtf2d(scale, iy_start + 1, imon, iday,
+                                      ihr, imin, isec)
 
         t_start = Time(jd1_start, jd2_start, scale=self.scale, format='jd')
         t_end = Time(jd1_end, jd2_end, scale=self.scale, format='jd')
@@ -293,9 +294,9 @@ class TimeDecimalYear(TimeFormat):
 
     @property
     def value(self):
-        iy_start, ims, ids, ihmsfs = erfa_time.jd_dtf(self.scale.upper().encode('utf8'),
-                                                 0,  # precision=0
-                                                 self.jd1, self.jd2)
+        scale = self.scale.upper().encode('ascii')
+        iy_start, ims, ids, ihmsfs = erfa.d2dtf(scale, 0,  # precision=0
+                                                self.jd1, self.jd2)
         imon = np.ones_like(iy_start)
         iday = np.ones_like(iy_start)
         ihr = np.zeros_like(iy_start)
@@ -304,10 +305,11 @@ class TimeDecimalYear(TimeFormat):
 
         # Possible enhancement: use np.unique to only compute start, stop
         # for unique values of iy_start.
-        jd1_start, jd2_start = erfa_time.dtf_jd(
-            self.scale.upper().encode('utf8'), iy_start, imon, iday, ihr, imin, isec)
-        jd1_end, jd2_end = erfa_time.dtf_jd(
-            self.scale.upper().encode('utf8'), iy_start + 1, imon, iday, ihr, imin, isec)
+        scale = self.scale.upper().encode('ascii')
+        jd1_start, jd2_start = erfa.dtf2d(scale, iy_start, imon, iday,
+                                          ihr, imin, isec)
+        jd1_end, jd2_end = erfa.dtf2d(scale, iy_start + 1, imon, iday,
+                                      ihr, imin, isec)
 
         dt = (self.jd1 - jd1_start) + (self.jd2 - jd2_start)
         dt_end = (jd1_end - jd1_start) + (jd2_end - jd2_start)
@@ -374,13 +376,22 @@ class TimeFromEpoch(TimeFormat):
         self.jd1 = tm._time.jd1
         self.jd2 = tm._time.jd2
 
-    @property
-    def value(self):
-        # when we get here, getattr will already have ensured our scale
-        # equals epoch scale, so we can just subtract the epoch and convert
-        time_from_epoch = ((self.jd1 - self.epoch.jd1) +
-                           (self.jd2 - self.epoch.jd2)) / self.unit
+    def to_value(self, parent=None):
+        # Make sure that scale is the same as epoch scale so we can just
+        # subtract the epoch and convert
+        if self.scale != self.epoch_scale:
+            if parent is None:
+                raise ValueError('cannot compute value without parent Time object')
+            tm = getattr(parent, self.epoch_scale)
+            jd1, jd2 = tm._time.jd1, tm._time.jd2
+        else:
+            jd1, jd2 = self.jd1, self.jd2
+
+        time_from_epoch = ((jd1 - self.epoch.jd1) +
+                           (jd2 - self.epoch.jd2)) / self.unit
         return time_from_epoch
+
+    value = property(to_value)
 
 
 class TimeUnix(TimeFromEpoch):
@@ -528,7 +539,7 @@ class TimeDatetime(TimeUnique):
 
     def _check_val_type(self, val1, val2):
         # Note: don't care about val2 for this class
-        if not all(isinstance(val, datetime) for val in val1.flat):
+        if not all(isinstance(val, datetime.datetime) for val in val1.flat):
             raise TypeError('Input values for {0} class must be '
                             'datetime objects'.format(self.name))
         return val1, None
@@ -552,15 +563,36 @@ class TimeDatetime(TimeUnique):
             imin[...] = dt.minute
             dsec[...] = dt.second + dt.microsecond / 1e6
 
-        self.jd1, self.jd2 = erfa_time.dtf_jd(
-            self.scale.upper().encode('utf8'), *iterator.operands[1:])
+        self.jd1, self.jd2 = erfa.dtf2d(self.scale.upper().encode('ascii'),
+                                        *iterator.operands[1:])
 
-    @property
-    def value(self):
-        iys, ims, ids, ihmsfs = erfa_time.jd_dtf(self.scale.upper()
-                                                 .encode('utf8'),
-                                                 6,  # precision=6 for microsec
-                                                 self.jd1, self.jd2)
+    def to_value(self, timezone=None, parent=None):
+        """
+        Convert to (potentially timezone-aware) `~datetime.datetime` object.
+
+        If ``timezone`` is not ``None``, return a timezone-aware datetime
+        object.
+
+        Parameters
+        ----------
+        timezone : {`~datetime.tzinfo`, None} (optional)
+            If not `None`, return timezone-aware datetime.
+
+        Returns
+        -------
+        `~datetime.datetime`
+            If ``timezone`` is not ``None``, output will be timezone-aware.
+        """
+        if timezone is not None:
+            if self._scale != 'utc':
+                raise ScaleValueError("scale is {}, must be 'utc' when timezone "
+                                      "is supplied.".format(self._scale))
+
+        # Rather than define a value property directly, we have a function,
+        # since we want to be able to pass in timezone information.
+        scale = self.scale.upper().encode('ascii')
+        iys, ims, ids, ihmsfs = erfa.d2dtf(scale, 6,  # 6 for microsec
+                                           self.jd1, self.jd2)
         ihrs = ihmsfs[..., 0]
         imins = ihmsfs[..., 1]
         isecs = ihmsfs[..., 2]
@@ -568,11 +600,66 @@ class TimeDatetime(TimeUnique):
         iterator = np.nditer([iys, ims, ids, ihrs, imins, isecs, ifracs, None],
                              flags=['refs_ok'],
                              op_dtypes=7*[iys.dtype] + [np.object])
-        for iy, im, id, ihr, imin, isec, ifracsec, out in iterator:
-            out[...] = datetime(iy, im, id, ihr, imin, isec, ifracsec)
 
+        for iy, im, id, ihr, imin, isec, ifracsec, out in iterator:
+            if timezone is not None:
+                out[...] = datetime.datetime(iy, im, id, ihr, imin, isec, ifracsec,
+                                             tzinfo=TimezoneInfo()).astimezone(timezone)
+            else:
+                out[...] = datetime.datetime(iy, im, id, ihr, imin, isec, ifracsec)
         return iterator.operands[-1]
 
+    value = property(to_value)
+
+class TimezoneInfo(datetime.tzinfo):
+    """
+    Subclass of the `~datetime.tzinfo` object, used in the
+    to_datetime method to specify timezones.
+
+    It may be safer in most cases to use a timezone database package like
+    pytz rather than defining your own timezones - this class is mainly
+    a workaround for users without pytz.
+    """
+    @u.quantity_input(utc_offset=u.day, dst=u.day)
+    def __init__(self, utc_offset=0*u.day, dst=0*u.day, tzname=None):
+        """
+        Parameters
+        ----------
+        utc_offset : `~astropy.units.Quantity` (optional)
+            Offset from UTC in days. Defaults to zero.
+        dst : `~astropy.units.Quantity` (optional)
+            Daylight Savings Time offset in days. Defaults to zero
+            (no daylight savings).
+        tzname : string, `None` (optional)
+            Name of timezone
+
+        Examples
+        --------
+        >>> from datetime import datetime
+        >>> from astropy.time import TimezoneInfo  # Specifies a timezone
+        >>> import astropy.units as u
+        >>> utc = TimezoneInfo()    # Defaults to UTC
+        >>> utc_plus_one_hour = TimezoneInfo(utc_offset=1*u.hour)  # UTC+1
+        >>> dt_aware = datetime(2000, 1, 1, 0, 0, 0, tzinfo=utc_plus_one_hour)
+        >>> print(dt_aware)
+        2000-01-01 00:00:00+01:00
+        >>> print(dt_aware.astimezone(utc))
+        1999-12-31 23:00:00+00:00
+        """
+        if utc_offset == 0 and dst == 0 and tzname is None:
+            tzname = 'UTC'
+        self._utcoffset = datetime.timedelta(utc_offset.to(u.day).value)
+        self._tzname = tzname
+        self._dst = datetime.timedelta(dst.to(u.day).value)
+
+    def utcoffset(self, dt):
+        return self._utcoffset
+
+    def tzname(self, dt):
+        return str(self._tzname)
+
+    def dst(self, dt):
+        return self._dst
 
 class TimeString(TimeUnique):
     """
@@ -644,18 +731,17 @@ class TimeString(TimeUnique):
             iy[...], im[...], id[...], ihr[...], imin[...], dsec[...] = (
                 self.parse_string(val.item(), subfmts))
 
-        self.jd1, self.jd2 = erfa_time.dtf_jd(
-            self.scale.upper().encode('utf8'), *iterator.operands[1:])
+        self.jd1, self.jd2 = erfa.dtf2d(self.scale.upper().encode('ascii'),
+                                        *iterator.operands[1:])
 
     def str_kwargs(self):
         """
         Generator that yields a dict of values corresponding to the
         calendar date and time for the internal JD values.
         """
-        iys, ims, ids, ihmsfs = erfa_time.jd_dtf(self.scale.upper()
-                                                 .encode('utf8'),
-                                                 self.precision,
-                                                 self.jd1, self.jd2)
+        scale = self.scale.upper().encode('ascii'),
+        iys, ims, ids, ihmsfs = erfa.d2dtf(scale, self.precision,
+                                           self.jd1, self.jd2)
 
         # Get the str_fmt element of the first allowed output subformat
         _, _, str_fmt = self._select_subfmts(self.out_subfmt)[0]
@@ -673,7 +759,7 @@ class TimeString(TimeUnique):
         for iy, im, id, ihr, imin, isec, ifracsec in np.nditer(
                 [iys, ims, ids, ihrs, imins, isecs, ifracs]):
             if has_yday:
-                yday = datetime(iy, im, id).timetuple().tm_yday
+                yday = datetime.datetime(iy, im, id).timetuple().tm_yday
 
             yield {'year': int(iy), 'mon': int(im), 'day': int(id),
                    'hour': int(ihr), 'min': int(imin), 'sec': int(isec),
@@ -914,21 +1000,21 @@ class TimeEpochDate(TimeFormat):
     """
     def set_jds(self, val1, val2):
         self._check_scale(self._scale)  # validate scale.
-        epoch_to_jd = getattr(erfa_time, self.epoch_to_jd)
+        epoch_to_jd = getattr(erfa, self.epoch_to_jd)
         jd1, jd2 = epoch_to_jd(val1 + val2)
         self.jd1, self.jd2 = day_frac(jd1, jd2)
 
     @property
     def value(self):
-        jd_to_epoch = getattr(erfa_time, self.jd_to_epoch)
+        jd_to_epoch = getattr(erfa, self.jd_to_epoch)
         return jd_to_epoch(self.jd1, self.jd2)
 
 
 class TimeBesselianEpoch(TimeEpochDate):
     """Besselian Epoch year as floating point value(s) like 1950.0"""
     name = 'byear'
-    epoch_to_jd = 'besselian_epoch_jd'
-    jd_to_epoch = 'jd_besselian_epoch'
+    epoch_to_jd = 'epb2jd'
+    jd_to_epoch = 'epb'
 
     def _check_val_type(self, val1, val2):
         """Input value validation, typically overridden by derived classes"""
@@ -944,8 +1030,8 @@ class TimeJulianEpoch(TimeEpochDate):
     """Julian Epoch year as floating point value(s) like 2000.0"""
     name = 'jyear'
     unit = erfa.DJY  # 365.25, the Julian year, for conversion to quantities
-    epoch_to_jd = 'julian_epoch_jd'
-    jd_to_epoch = 'jd_julian_epoch'
+    epoch_to_jd = 'epj2jd'
+    jd_to_epoch = 'epj'
 
 
 class TimeEpochDateString(TimeString):
@@ -970,12 +1056,12 @@ class TimeEpochDateString(TimeString):
                 years[...] = year
 
         self._check_scale(self._scale)  # validate scale.
-        epoch_to_jd = getattr(erfa_time, self.epoch_to_jd)
+        epoch_to_jd = getattr(erfa, self.epoch_to_jd)
         self.jd1, self.jd2 = epoch_to_jd(iterator.operands[-1])
 
     @property
     def value(self):
-        jd_to_epoch = getattr(erfa_time, self.jd_to_epoch)
+        jd_to_epoch = getattr(erfa, self.jd_to_epoch)
         years = jd_to_epoch(self.jd1, self.jd2)
         # Use old-style format since it is a factor of 2 faster
         str_fmt = self.epoch_prefix + '%.' + str(self.precision) + 'f'
@@ -986,16 +1072,16 @@ class TimeEpochDateString(TimeString):
 class TimeBesselianEpochString(TimeEpochDateString):
     """Besselian Epoch year as string value(s) like 'B1950.0'"""
     name = 'byear_str'
-    epoch_to_jd = 'besselian_epoch_jd'
-    jd_to_epoch = 'jd_besselian_epoch'
+    epoch_to_jd = 'epb2jd'
+    jd_to_epoch = 'epb'
     epoch_prefix = 'B'
 
 
 class TimeJulianEpochString(TimeEpochDateString):
     """Julian Epoch year as string value(s) like 'J2000.0'"""
     name = 'jyear_str'
-    epoch_to_jd = 'julian_epoch_jd'
-    jd_to_epoch = 'jd_julian_epoch'
+    epoch_to_jd = 'epj2jd'
+    jd_to_epoch = 'epj'
     epoch_prefix = 'J'
 
 

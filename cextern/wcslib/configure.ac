@@ -3,12 +3,12 @@
 #-----------------------------------------------------------------------------
 # Author: Mark Calabretta, Australia Telescope National Facility, CSIRO.
 # http://www.atnf.csiro.au/people/Mark.Calabretta
-# $Id: configure.ac,v 5.9 2015/07/21 09:20:04 mcalabre Exp $
+# $Id: configure.ac,v 5.14 2016/02/07 10:49:33 mcalabre Exp $
 #-----------------------------------------------------------------------------
 
-AC_INIT([WCSLIB], [5.9], [mark@calabretta.id.au], [wcslib-5.9])
+AC_INIT([WCSLIB], [5.14], [mark@calabretta.id.au], [wcslib-5.14])
 AC_PREREQ([2.53])
-AC_REVISION([$Revision: 5.9 $])
+AC_REVISION([$Revision: 5.14 $])
 AC_SUBST([PACKAGE_VERSION])
 AC_DEFINE_UNQUOTED([WCSLIB_VERSION], [$PACKAGE_VERSION], [Define wcslib version])
 
@@ -243,7 +243,7 @@ if test "x$ac_cv_c_compiler_gnu" = xyes ; then
     SONAME="libwcs.$SHVER.dylib"
     SHRLD="$SHRLD -dynamiclib -single_module"
     SHRLD="$SHRLD -compatibility_version $SHVER -current_version $LIBVER"
-    SHRLN=
+    SHRLN="libwcs.dylib"
 
     case "$build_cpu" in
     powerpc*)

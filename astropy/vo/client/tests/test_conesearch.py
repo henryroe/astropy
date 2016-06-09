@@ -46,7 +46,7 @@ class TestConeSearch(object):
     """
     def setup_class(self):
         # If this link is broken, use the next in database that works
-        self.url = 'http://www.nofs.navy.mil/cgi-bin/vo_cone.cgi?CAT=USNO-A2&'
+        self.url = 'http://vizier.u-strasbg.fr/viz-bin/votable/-A?-out.all&-source=I/252/out&'
         self.catname = 'USNO-A2'
 
         # Avoid downloading the full database
@@ -100,7 +100,7 @@ class TestConeSearch(object):
             with data.conf.set_temp('remote_timeout', 0.001):
                 tab = conesearch.conesearch(
                     SCS_CENTER, SCS_RADIUS, pedantic=self.pedantic,
-                    verbose=self.verbose, catalog_db=self.url)
+                    verbose=self.verbose, catalog_db=self.url, cache=False)
         except VOSError as e:
             assert 'timed out' in str(e), 'test_timeout failed'
         else:
@@ -179,7 +179,9 @@ class TestConeSearch(object):
             pedantic=self.pedantic, verbose=self.verbose)
 
         assert n_2 > 0 and n_2 <= n_1 * 1.5
-        assert t_2 > 0 and t_2 <= t_1 * 1.5
+
+        # Timer depends on network latency as well, so upper limit is very lax.
+        assert t_2 > 0 and t_2 <= t_1 * 10
 
     def test_prediction_neg_radius(self):
         with pytest.raises(ConeSearchError):

@@ -26,7 +26,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from ..utils.compat import ignored
+from ..utils.compat import suppress
 from ..utils.compat.funcsigs import signature
 from ..extern import six
 
@@ -690,11 +690,11 @@ class FunctionTransform(CoordinateTransform):
         if not six.callable(func):
             raise TypeError('func must be callable')
 
-        with ignored(TypeError):
+        with suppress(TypeError):
             sig = signature(func)
             kinds = [x.kind for x in sig.parameters.values()]
             if (len(x for x in kinds if x == sig.POSITIONAL_ONLY) != 2
-                and not sig.VAR_POSITIONAL in kinds):
+                and sig.VAR_POSITIONAL not in kinds):
                 raise ValueError('provided function does not accept two arguments')
 
         self.func = func
@@ -766,10 +766,10 @@ class StaticMatrixTransform(CoordinateTransform):
         z = v2[2].reshape(subshape)
 
         newrep = CartesianRepresentation(x, y, z)
-        if fromcoord.data.__class__ == UnitSphericalRepresentation:
+        if issubclass(fromcoord.data.__class__, UnitSphericalRepresentation):
             #need to special-case this because otherwise the new class will
             #think it has a valid distance
-            newrep = newrep.represent_as(UnitSphericalRepresentation)
+            newrep = newrep.represent_as(fromcoord.data.__class__)
 
         frameattrs = dict([(attrnm, getattr(fromcoord, attrnm))
                            for attrnm in self.overlapping_frame_attr_names])
@@ -818,22 +818,19 @@ class DynamicMatrixTransform(CoordinateTransform):
             priority=priority, register_graph=register_graph)
 
     def __call__(self, fromcoord, toframe):
+
         from .representation import CartesianRepresentation, \
                                     UnitSphericalRepresentation
 
-        xyz = fromcoord.represent_as(CartesianRepresentation).xyz
-        v = xyz.reshape((3, xyz.size // 3))
-        v2 = np.dot(np.asarray(self.matrix_func(fromcoord, toframe)), v)
-        subshape = xyz.shape[1:]
-        x = v2[0].reshape(subshape)
-        y = v2[1].reshape(subshape)
-        z = v2[2].reshape(subshape)
+        transform_matrix = self.matrix_func(fromcoord, toframe)
 
-        newrep = CartesianRepresentation(x, y, z)
-        if fromcoord.data.__class__ == UnitSphericalRepresentation:
+        rep = fromcoord.represent_as(CartesianRepresentation)
+        newrep = rep.transform(transform_matrix)
+
+        if issubclass(fromcoord.data.__class__, UnitSphericalRepresentation):
             #need to special-case this because otherwise the new class will
             #think it has a valid distance
-            newrep = newrep.represent_as(UnitSphericalRepresentation)
+            newrep = newrep.represent_as(fromcoord.data.__class__)
 
         return toframe.realize_frame(newrep)
 

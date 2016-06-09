@@ -8,41 +8,29 @@ from ..extern.six.moves import xrange
 
 import os
 import sys
+import re
 
 import numpy as np
 
 from .. import log
-# Note, in numpy <= 1.6, some classes do not properly represent themselves.
-from ..utils.compat import NUMPY_LT_1_6_1
 from ..utils.console import Getch, color_print, terminal_size, conf
 from ..utils.data_info import dtype_info_name
 
-if six.PY3:
-    def default_format_func(format_, val):
-        if isinstance(val, bytes):
-            return val.decode('utf-8')
-        else:
-            return str(val)
-    _format_funcs = {None: default_format_func}
-elif six.PY2:
-    _format_funcs = {None: lambda format_, val: text_type(val)}
+__all__ = []
+
+
+def default_format_func(format_, val):
+    if isinstance(val, bytes):
+        return val.decode('utf-8')
+    else:
+        return text_type(val)
+
+
+_format_funcs = {None: default_format_func}
 
 
 ### The first three functions are helpers for _auto_format_func
 
-
-def _use_val_tolist(format_func):
-    """Wrap format function to work with values converted to python equivalents.
-
-    In numpy <= 1.6, classes such as np.float32 do not properly represent
-    themselves as floats, and hence cannot easily be formatted; see
-    https://github.com/astropy/astropy/issues/148#issuecomment-3930809
-    Hence, we force the value to a python type using tolist()
-    (except for np.ma.masked, since np.ma.masked.tolist() is None).
-    """
-    return lambda format_, val: format_func(format_,
-                                            val if val is np.ma.masked
-                                            else val.tolist())
 
 def _use_str_for_masked_values(format_func):
     """Wrap format function to trap masked values.
@@ -77,8 +65,6 @@ def _auto_format_func(format_, val):
 
     if six.callable(format_):
         format_func = lambda format_, val: format_(val)
-        if NUMPY_LT_1_6_1:
-            format_func = _use_val_tolist(format_func)
         try:
             out = format_func(format_, val)
             if not isinstance(out, six.string_types):
@@ -108,9 +94,6 @@ def _auto_format_func(format_, val):
             return str(val)
 
         for format_func in _possible_string_format_functions(format_):
-            if NUMPY_LT_1_6_1:
-                format_func = _use_val_tolist(format_func)
-
             try:
                 # Does this string format method work?
                 out = format_func(format_, val)
@@ -187,7 +170,6 @@ class TableFormatter(object):
 
         return max_lines, max_width
 
-
     def _pformat_col(self, col, max_lines=None, show_name=True, show_unit=None,
                      show_dtype=False, show_length=None, html=False, align=None):
         """Return a list of formatted string representation of column values.
@@ -215,18 +197,19 @@ class TableFormatter(object):
         html : bool
             Output column as HTML
 
-        align : str or list
-            Left/right alignment of a column. Default is 'right'. A list
-            of strings can be provided for alignment of tables with multiple
-            columns.
+        align : str
+            Left/right alignment of columns. Default is '>' (right) for all
+            columns. Other allowed values are '<', '^', and '0=' for left,
+            centered, and 0-padded, respectively.
 
         Returns
         -------
         lines : list
             List of lines with formatted column values
 
-        n_header : int
-            Number of lines in the header
+        outs : dict
+            Dict which is used to pass back additional values
+            defined within the iterator.
 
         """
         if show_unit is None:
@@ -266,57 +249,48 @@ class TableFormatter(object):
         else:
             col_width = max(len(x) for x in col_strs) if col_strs else 1
 
-            # Center line content and generate dashed headerline
+            # Center line header content and generate dashed headerline
             for i in outs['i_centers']:
                 col_strs[i] = col_strs[i].center(col_width)
             if outs['i_dashes'] is not None:
                 col_strs[outs['i_dashes']] = '-' * col_width
 
-            # Format columns according to alignment
-            justify_methods = {'<': 'ljust', '^': 'center', '>': 'rjust'}
+            # Format columns according to alignment.  `align` arg has precedent, otherwise
+            # use `col.format` if it starts as a legal alignment string.  If neither applies
+            # then right justify.
+            re_fill_align = re.compile(r'(?P<fill>.?)(?P<align>[<^>=])')
+            match = None
+            if align:
+                # If there is an align specified then it must match
+                match = re_fill_align.match(align)
+                if not match:
+                    raise ValueError("column align must be one of '<', '^', '>', or '='")
+            elif isinstance(col.info.format, six.string_types):
+                # col.info.format need not match, in which case rjust gets used
+                match = re_fill_align.match(col.info.format)
+
+            if match:
+                fill_char = match.group('fill')
+                align_char = match.group('align')
+                if align_char == '=':
+                    if fill_char != '0':
+                        raise ValueError("fill character must be '0' for '=' align")
+                    fill_char = ''  # str.zfill gets used which does not take fill char arg
+            else:
+                fill_char = ''
+                align_char = '>'
+
+            justify_methods = {'<': 'ljust', '^': 'center', '>': 'rjust', '=': 'zfill'}
+            justify_method = justify_methods[align_char]
+            justify_args = (col_width, fill_char) if fill_char else (col_width,)
+
             for i, col_str in enumerate(col_strs):
-                if align is None:
-                    try:
-                        if col.format[:2] == '0=':
-                            justify = (lambda col_str, col_width:
-                                       getattr(col_str, 'zfill')(col_width))
-                        else:
-                            justify_method = justify_methods.get(col.format[0], None)
-                            if justify_method is None:
-                                justify_method = justify_methods[col.format[1]]
-                                justify = (lambda col_str, col_width:
-                                           getattr(col_str, justify_method)(col_width,
-                                                                            col.format[0]))
-                            else:
-                                justify = (lambda col_str, col_width:
-                                           getattr(col_str, justify_method)(col_width))
-                    except:
-                        justify = (lambda col_str, col_width:
-                                   getattr(col_str, 'rjust')(col_width))
-                else:
-                    if align == '0=':
-                        justify = (lambda col_str, col_width:
-                                       getattr(col_str, 'zfill')(col_width))
-                    elif align in ['<','^','>']:
-                        justify_method = justify_methods.get(align, None)
-                        if justify_method is None:
-                            justify_method = justify_methods[col.format[1]]
-                            justify = (lambda col_str, col_width:
-                                       getattr(col_str, justify_method)(col_width,
-                                                                        col.format[0]))
-                        else:
-                            justify = (lambda col_str, col_width:
-                                       getattr(col_str, justify_method)(col_width))
-                    else:
-                        justify = (lambda col_str, col_width:
-                                   getattr(col_str, 'rjust')(col_width))
-                col_strs[i] = justify(col_str, col_width)
+                col_strs[i] = getattr(col_str, justify_method)(*justify_args)
 
         if outs['show_length']:
             col_strs.append('Length = {0} rows'.format(len(col)))
 
         return col_strs, outs
-
 
     def _pformat_col_iter(self, col, max_lines, show_name, show_unit, outs,
                           show_dtype=False, show_length=None):
@@ -335,16 +309,16 @@ class TableFormatter(object):
             for units only if one or more columns has a defined value
             for the unit.
 
+        outs : dict
+            Must be a dict which is used to pass back additional values
+            defined within the iterator.
+
         show_dtype : bool
             Include column dtype (default=False)
 
         show_length : bool
             Include column length at end.  Default is to show this only
             if the column is not shown completely.
-
-        out : dict
-            Must be a dict which is used to pass back additional values
-            defined within the iterator.
         """
         max_lines, _ = self._get_pprint_size(max_lines, -1)
 
@@ -423,10 +397,9 @@ class TableFormatter(object):
         outs['i_centers'] = i_centers
         outs['i_dashes'] = i_dashes
 
-
-    def _pformat_table(self, table, max_lines=None, max_width=None, show_name=True,
-                       show_unit=None, show_dtype=False,
-                       html=False, tableid=None, align='right'):
+    def _pformat_table(self, table, max_lines=None, max_width=None,
+                       show_name=True, show_unit=None, show_dtype=False,
+                       html=False, tableid=None, tableclass=None, align=None):
         """Return a list of lines for the formatted string representation of
         the table.
 
@@ -457,18 +430,25 @@ class TableFormatter(object):
             "table{id}", where id is the unique integer id of the table object,
             id(table)
 
-        align : str or list
-            Left/right alignment of a column. Default is 'right'. A list
-            of strings can be provided for alignment of tables with multiple
-            columns.
+        tableclass : str or list of str or `None`
+            CSS classes for the table; only used if html is set.  Default is
+            none
+
+        align : str or list or tuple
+            Left/right alignment of columns. Default is '>' (right) for all
+            columns. Other allowed values are '<', '^', and '0=' for left,
+            centered, and 0-padded, respectively. A list of strings can be
+            provided for alignment of tables with multiple columns.
 
         Returns
         -------
-        out : str
-            Formatted table as a single string
+        rows : list
+            Formatted table as a list of strings
 
-        n_header : int
-            Number of lines in the header
+        outs : dict
+            Dict which is used to pass back additional values
+            defined within the iterator.
+
         """
         # "Print" all the values into temporary lists by column for subsequent
         # use and to determine the width
@@ -478,32 +458,27 @@ class TableFormatter(object):
         if show_unit is None:
             show_unit = any([col.info.unit for col in six.itervalues(table.columns)])
 
-        # Figure out align
-        if isinstance(align,str):
-            align = align
-        elif isinstance(align,list) and len(align) == 1:
-            align = align[0]
-        elif isinstance(align,list) and len(align) == len(table.columns.values()):
-            align = align
-        else:
-            align = 'right'
+        # Coerce align into a correctly-sized list of alignments (if possible)
+        n_cols = len(table.columns)
+        if align is None or isinstance(align, six.string_types):
+            align = [align] * n_cols
 
-        # If align remains a list, need to loop over values
-        if type(align) == list:
-            for i,col in enumerate(table.columns.values()):
-                lines, outs = self._pformat_col(col, max_lines, show_name=show_name,
-                                                show_unit=show_unit, show_dtype=show_dtype,
-                                                align=align[i])
-                if outs['show_length']:
-                    lines = lines[:-1]
-                cols.append(lines)
+        elif isinstance(align, (list, tuple)):
+            if len(align) != n_cols:
+                raise ValueError('got {0} alignment values instead of '
+                                 'the number of columns ({1})'
+                                 .format(len(align), n_cols))
         else:
-            for col in six.itervalues(table.columns):
-                lines, outs = self._pformat_col(col, max_lines, show_name=show_name,
-                                                show_unit=show_unit, show_dtype=show_dtype)
-                if outs['show_length']:
-                    lines = lines[:-1]
-                cols.append(lines)
+            raise TypeError('align keyword must be str or list or tuple (got {0})'
+                            .format(type(align)))
+
+        for align_, col in izip(align, table.columns.values()):
+            lines, outs = self._pformat_col(col, max_lines, show_name=show_name,
+                                            show_unit=show_unit, show_dtype=show_dtype,
+                                            align=align_)
+            if outs['show_length']:
+                lines = lines[:-1]
+            cols.append(lines)
 
         if not cols:
             return ['<No columns>'], {'show_length': False}
@@ -534,7 +509,15 @@ class TableFormatter(object):
 
             if tableid is None:
                 tableid = 'table{id}'.format(id=id(table))
-            rows.append('<table id="{tid}">'.format(tid=tableid))
+
+            if tableclass is not None:
+                if isinstance(tableclass, list):
+                    tableclass = ' '.join(tableclass)
+                rows.append('<table id="{tid}" class="{tcls}">'.format(
+                    tid=tableid, tcls=tableclass))
+            else:
+                rows.append('<table id="{tid}">'.format(tid=tableid))
+
             for i in range(n_rows):
                 # _pformat_col output has a header line '----' which is not needed here
                 if i == n_header - 1:
@@ -554,9 +537,8 @@ class TableFormatter(object):
 
         return rows, outs
 
-
-    def _more_tabcol(self, tabcol, max_lines=None, max_width=None, show_name=True,
-                     show_unit=None, show_dtype=False):
+    def _more_tabcol(self, tabcol, max_lines=None, max_width=None,
+                     show_name=True, show_unit=None, show_dtype=False):
         """Interactive "more" of a table or column.
 
         Parameters

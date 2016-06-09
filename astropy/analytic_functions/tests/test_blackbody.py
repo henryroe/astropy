@@ -3,7 +3,6 @@
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
-import os
 # THIRD-PARTY
 import numpy as np
 
@@ -11,7 +10,8 @@ import numpy as np
 from ..blackbody import blackbody_nu, blackbody_lambda, FNU
 from ... import units as u
 from ... import constants as const
-from ...tests.helper import pytest
+from ...tests.helper import pytest, catch_warnings
+from ...utils.exceptions import AstropyUserWarning
 
 try:
     from scipy import integrate  # pylint: disable=W0611
@@ -24,7 +24,6 @@ else:
 __doctest_skip__ = ['*']
 
 
-@pytest.mark.skipif("os.environ.get('APPVEYOR')",  reason="fails on AppVeyor")
 @pytest.mark.skipif('not HAS_SCIPY')
 def test_blackbody_scipy():
     """Test Planck function.
@@ -45,7 +44,6 @@ def test_blackbody_scipy():
     np.testing.assert_allclose(intflux, ans.value, rtol=0.01)  # 1% accuracy
 
 
-@pytest.mark.skipif("os.environ.get('APPVEYOR')",  reason="fails on AppVeyor")
 def test_blackbody_overflow():
     """Test Planck function with overflow."""
     photlam = u.photon / (u.cm**2 * u.s * u.AA)
@@ -67,7 +65,6 @@ def test_blackbody_overflow():
     assert flux.value == 0
 
 
-@pytest.mark.skipif("os.environ.get('APPVEYOR')",  reason="fails on AppVeyor")
 def test_blackbody_synphot():
     """Test that it is consistent with IRAF SYNPHOT BBFUNC."""
     # Solid angle of solar radius at 1 kpc
@@ -85,13 +82,42 @@ def test_blackbody_synphot():
         rtol=0.01)  # 1% accuracy
 
 
-def test_blackbody_exceptions():
+def test_blackbody_exceptions_and_warnings():
     """Test exceptions."""
 
     # Negative temperature
-    with pytest.raises(ValueError):
-        flux = blackbody_nu(1000 * u.AA, -100)
+    with pytest.raises(ValueError) as exc:
+        blackbody_nu(1000 * u.AA, -100)
+    assert exc.value.args[0] == 'Temperature should be positive: -100.0 K'
 
     # Zero wavelength given for conversion to Hz
-    with pytest.raises(ZeroDivisionError):
-        flux = blackbody_nu(0 * u.AA, 5000)
+    with catch_warnings(AstropyUserWarning) as w:
+        blackbody_nu(0 * u.AA, 5000)
+    assert len(w) == 1
+    assert 'invalid' in w[0].message.args[0]
+
+    # Negative wavelength given for conversion to Hz
+    with catch_warnings(AstropyUserWarning) as w:
+        blackbody_nu(-1. * u.AA, 5000)
+    assert len(w) == 1
+    assert 'invalid' in w[0].message.args[0]
+
+
+def test_blackbody_array_temperature():
+
+    # Regression test to make sure that the temperature can be an array
+
+    flux = blackbody_nu(1.2 * u.mm, [100, 200, 300] * u.K)
+
+    np.testing.assert_allclose(flux.value,
+                               [1.804908e-12,   3.721328e-12,   5.638513e-12],
+                                rtol=1e-5)
+
+    flux = blackbody_nu([2, 4, 6] * u.mm, [100, 200, 300] * u.K)
+
+    np.testing.assert_allclose(flux.value,
+                               [6.657915e-13,   3.420677e-13,   2.291897e-13],
+                                rtol=1e-5)
+
+    flux = blackbody_nu(np.ones((3, 4)) * u.mm, np.ones(4) * u.K)
+    assert flux.shape == (3, 4)

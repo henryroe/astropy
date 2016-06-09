@@ -90,7 +90,7 @@ feature needs to be explicitly turned on:
 .. doctest-requires:: matplotlib
 
     >>> from astropy.visualization import quantity_support
-    >>> quantity_support()
+    >>> quantity_support()  # doctest: +IGNORE_OUTPUT
     <astropy.visualization.units.MplQuantityConverter ...>
 
 Then |quantity| objects can be passed to matplotlib plotting
@@ -100,42 +100,70 @@ the quantity:
 .. doctest-requires:: matplotlib
 
     >>> from matplotlib import pyplot as plt
-    >>> plt.figure()
+    >>> plt.figure(figsize=(5,3))
     <...>
     >>> plt.plot([1, 2, 3] * u.m)
     [...]
 
+.. plot::
+
+    from astropy import units as u
+    from astropy.visualization import quantity_support
+    quantity_support()
+    from matplotlib import pyplot as plt
+    plt.figure(figsize=(5,3))
+    plt.plot([1, 2, 3] * u.m)
+
 Quantities are automatically converted to the first unit set on a
 particular axis, so in the following, the y-axis remains in ``m`` even
-though the second line is given in ``cm``::
+though the second line is given in ``cm``:
 
 .. doctest-requires:: matplotlib
 
     >>> plt.plot([1, 2, 3] * u.cm)
     [...]
 
-Plotting a quantity with an incompatible unit will raise an exception::
+.. plot::
+
+    from astropy import units as u
+    from astropy.visualization import quantity_support
+    quantity_support()
+    from matplotlib import pyplot as plt
+    plt.figure(figsize=(5,3))
+    plt.plot([1, 2, 3] * u.m)
+    plt.plot([1, 2, 3] * u.cm)
+
+Plotting a quantity with an incompatible unit will raise an exception:
 
 .. doctest-requires:: matplotlib
 
-    >>> plt.plot([1, 2, 3] * u.kg)
+    >>> plt.plot([1, 2, 3] * u.kg)  # doctest: +IGNORE_EXCEPTION_DETAIL
     Traceback (most recent call last):
     ...
     UnitConversionError: 'kg' (mass) and 'm' (length) are not convertible
     >>> plt.clf()
 
 To make sure unit support is turned off afterward, you can use
-`~astropy.visualization.quantity_support` with a ``with`` statement::
+`~astropy.visualization.quantity_support` with a ``with`` statement:
 
 .. doctest-requires:: matplotlib
 
     >>> from astropy.visualization import quantity_support
     >>> from matplotlib import pyplot as plt
     >>> with quantity_support():
-    ...     plt.figure()
+    ...     plt.figure(figsize=(5,3))
     ...     plt.plot([1, 2, 3] * u.m)
     <...>
     [...]
+
+.. plot::
+
+    from astropy import units as u
+    from astropy.visualization import quantity_support
+    from matplotlib import pyplot as plt
+    with quantity_support():
+        plt.figure(figsize=(5,3))
+        plt.plot([1, 2, 3] * u.m)
 
 Arithmetic
 ----------
@@ -164,10 +192,10 @@ resulting object **has units of the object on the left**:
     >>> 13.5 * u.km - 1100.1 * u.m  # doctest: +FLOAT_CMP
     <Quantity 12.3999 km>
 
-Addition and subtraction is not supported between |quantity| objects and basic
+Addition and subtraction are not supported between |quantity| objects and basic
 numeric types:
 
-    >>> 13.5 * u.km + 19.412
+    >>> 13.5 * u.km + 19.412  # doctest: +IGNORE_EXCEPTION_DETAIL
     Traceback (most recent call last):
       ...
     UnitsError: Can only apply 'add' function to dimensionless
@@ -179,7 +207,7 @@ except for dimensionless quantities (see `Dimensionless quantities`_).
 Multiplication and Division
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Multiplication and division is supported between |quantity| objects with any
+Multiplication and division are supported between |quantity| objects with any
 units, and with numeric types. For these operations between objects with
 equivalent units, the **resulting object has composite units**:
 

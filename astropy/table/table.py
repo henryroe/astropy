@@ -4,9 +4,11 @@ from __future__ import (absolute_import, division, print_function,
 from ..extern import six
 from ..extern.six.moves import zip as izip
 from ..extern.six.moves import range as xrange
+from .index import TableIndices, TableLoc, TableILoc
 
 import re
 import sys
+from collections import OrderedDict
 
 from copy import deepcopy
 
@@ -16,7 +18,7 @@ from numpy import ma
 from .. import log
 from ..io import registry as io_registry
 from ..units import Quantity
-from ..utils import OrderedDict, isiterable, deprecated, minversion
+from ..utils import isiterable, deprecated
 from ..utils.console import color_print
 from ..utils.metadata import MetaData
 from ..utils.data_info import BaseColumnInfo, MixinInfo, ParentDtypeInfo
@@ -27,11 +29,8 @@ from .column import (BaseColumn, Column, MaskedColumn, _auto_names, FalseArray,
 from .row import Row
 from .np_utils import fix_column_name, recarray_fromrecords
 from .info import TableInfo
-
-# Prior to Numpy 1.6.2, there was a bug (in Numpy) that caused
-# sorting of structured arrays containing Unicode columns to
-# silently fail.
-_BROKEN_UNICODE_TABLE_SORT = not minversion(np, '1.6.2')
+from .index import Index, _IndexModeContext, get_index
+from . import conf
 
 
 __doctest_skip__ = ['Table.read', 'Table.write',
@@ -97,7 +96,7 @@ class TableColumns(OrderedDict):
         """
         if isinstance(item, six.string_types):
             return OrderedDict.__getitem__(self, item)
-        elif isinstance(item, int):
+        elif isinstance(item, (int, np.integer)):
             return self.values()[item]
         elif isinstance(item, tuple):
             return self.__class__([self[x] for x in item])
@@ -106,6 +105,12 @@ class TableColumns(OrderedDict):
         else:
             raise IndexError('Illegal key or index value for {} object'
                              .format(self.__class__.__name__))
+
+    def __setitem__(self, item, value):
+        if item in self:
+            raise ValueError("Cannot replace column '{0}'.  Use Table.replace_column() instead."
+                             .format(item))
+        super(TableColumns, self).__setitem__(item, value)
 
     def __repr__(self):
         names = ("'{0}'".format(x) for x in six.iterkeys(self))
@@ -145,7 +150,7 @@ class Table(object):
 
     Parameters
     ----------
-    data : numpy ndarray, dict, list, or Table, optional
+    data : numpy ndarray, dict, list, Table, or table-like object, optional
         Data to initialize table.
     masked : bool, optional
         Specify whether the table is masked.
@@ -159,6 +164,10 @@ class Table(object):
         Copy the input data (default=True).
     rows : numpy ndarray, list of lists, optional
         Row-oriented data for table instead of ``data`` argument
+    copy_indices : bool, optional
+        Copy any indices in the input data (default=True)
+    **kwargs : dict, optional
+        Additional keyword args when converting table-like object
     """
 
     meta = MetaData()
@@ -224,20 +233,24 @@ class Table(object):
         data = empty_init(len(self), dtype=dtype)
         for col in cols:
             # When assigning from one array into a field of a structured array,
-            # Numpy will automatically swap thos columns to their destination
+            # Numpy will automatically swap those columns to their destination
             # byte order where applicable
             data[col.info.name] = col
 
         return data
 
     def __init__(self, data=None, masked=None, names=None, dtype=None,
-                 meta=None, copy=True, rows=None):
+                 meta=None, copy=True, rows=None, copy_indices=True,
+                 **kwargs):
 
         # Set up a placeholder empty table
         self._set_masked(masked)
         self.columns = self.TableColumns()
         self.meta = meta
         self.formatter = self.TableFormatter()
+        self._copy_indices = True # copy indices from this Table by default
+        self._init_indices = copy_indices # whether to copy indices in init
+        self.primary_key = None
 
         # Must copy if dtype are changing
         if not copy and dtype is not None:
@@ -263,6 +276,18 @@ class Table(object):
         # function, number of columns, and potentially the default col names
 
         default_names = None
+
+        if hasattr(data, '__astropy_table__'):
+            # Data object implements the __astropy_table__ interface method.
+            # Calling that method returns an appropriate instance of
+            # self.__class__ and respects the `copy` arg.  The returned
+            # Table object should NOT then be copied (though the meta
+            # will be deep-copied anyway).
+            data = data.__astropy_table__(self.__class__, copy, **kwargs)
+            copy = False
+        elif kwargs:
+            raise TypeError('__init__() got unexpected keyword argument {!r}'
+                            .format(list(kwargs.keys())[0]))
 
         if (isinstance(data, np.ndarray) and
                 data.shape == (0,) and
@@ -301,6 +326,8 @@ class Table(object):
             init_func = self._init_from_table
             n_cols = len(data.colnames)
             default_names = data.colnames
+            # don't copy indices if the input Table is in non-copy mode
+            self._init_indices = self._init_indices and data._copy_indices
 
         elif data is None:
             if names is None:
@@ -344,11 +371,13 @@ class Table(object):
         init_func(data, names, dtype, n_cols, copy)
 
         # Whatever happens above, the masked property should be set to a boolean
-        if type(self.masked) != bool:
+        if type(self.masked) is not bool:
             raise TypeError("masked property has not been set to True or False")
 
     def __getstate__(self):
-        return (self.columns.values(), self.meta)
+        columns = OrderedDict((key, col if isinstance(col, BaseColumn) else col_copy(col))
+                              for key, col in self.columns.items())
+        return (columns, self.meta)
 
     def __setstate__(self, state):
         columns, meta = state
@@ -397,6 +426,112 @@ class Table(object):
         else:
             data = self
         return self.__class__(data, meta=deepcopy(self.meta))
+
+    @property
+    def indices(self):
+        '''
+        Return the indices associated with columns of the table
+        as a TableIndices object.
+        '''
+        lst = []
+        for column in self.columns.values():
+            for index in column.info.indices:
+                if sum([index is x for x in lst]) == 0: # ensure uniqueness
+                    lst.append(index)
+        return TableIndices(lst)
+
+    @property
+    def loc(self):
+        '''
+        Return a TableLoc object that can be used for retrieving
+        rows by index in a given data range. Note that both loc
+        and iloc work only with single-column indices.
+        '''
+        return TableLoc(self)
+
+    @property
+    def iloc(self):
+        '''
+        Return a TableILoc object that can be used for retrieving
+        indexed rows in the order they appear in the index.
+        '''
+        return TableILoc(self)
+
+    def add_index(self, colnames, engine=None, unique=False):
+        '''
+        Insert a new index among one or more columns.
+        If there are no indices, make this index the
+        primary table index.
+
+        Parameters
+        ----------
+        colnames : str or list
+            List of column names (or a single column name) to index
+        engine : type or None
+            Indexing engine class to use, from among SortedArray, BST,
+            FastBST, and FastRBT. If the supplied argument is None (by
+            default), use SortedArray.
+        unique : bool (defaults to False)
+            Whether the values of the index must be unique
+        '''
+        if isinstance(colnames, six.string_types):
+            colnames = (colnames,)
+        columns = self.columns[tuple(colnames)].values()
+
+        # make sure all columns support indexing
+        for col in columns:
+            if not getattr(col.info, '_supports_indexing', False):
+                raise ValueError('Cannot create an index on column "{0}", of '
+                                 'type "{1}"'.format(col.info.name, type(col)))
+
+        index = Index(columns, engine=engine, unique=unique)
+        if not self.indices:
+            self.primary_key = colnames
+        for col in columns:
+            col.info.indices.append(index)
+
+    def remove_indices(self, colname):
+        '''
+        Remove all indices involving the given column.
+        If the primary index is removed, the new primary
+        index will be the most recently added remaining
+        index.
+
+        Parameters
+        ----------
+        colname : str
+            Name of column
+        '''
+        col = self.columns[colname]
+        for index in self.indices:
+            try:
+                index.col_position(col.info.name)
+            except ValueError:
+                pass
+            else:
+                for c in index.columns:
+                    c.info.indices.remove(index)
+
+    def index_mode(self, mode):
+        '''
+        Return a context manager for an indexing mode.
+
+        Parameters
+        ----------
+        mode : str
+            Either 'freeze', 'copy_on_getitem', or 'discard_on_copy'.
+            In 'discard_on_copy' mode,
+            indices are not copied whenever columns or tables are copied.
+            In 'freeze' mode, indices are not modified whenever columns are
+            modified; at the exit of the context, indices refresh themselves
+            based on column values. This mode is intended for scenarios in
+            which one intends to make many additions or modifications in an
+            indexed column.
+            In 'copy_on_getitem' mode, indices are copied when taking column
+            slices as well as table slices, so col[i0:i1] will preserve
+            indices.
+        '''
+        return _IndexModeContext(self, mode)
 
     def __array__(self, dtype=None):
         """Support converting Table to np.array via np.array(table).
@@ -480,17 +615,17 @@ class Table(object):
             if isinstance(col, (Column, MaskedColumn)):
                 col = self.ColumnClass(name=(name or col.info.name or def_name),
                                        data=col, dtype=dtype,
-                                       copy=copy)
+                                       copy=copy, copy_indices=self._init_indices)
             elif self._add_as_mixin_column(col):
                 # Copy the mixin column attributes if they exist since the copy below
                 # may not get this attribute.
                 if copy:
-                    col = col_copy(col)
+                    col = col_copy(col, copy_indices=self._init_indices)
 
                 col.info.name = name or col.info.name or def_name
             elif isinstance(col, np.ndarray) or isiterable(col):
                 col = self.ColumnClass(name=(name or def_name), data=col, dtype=dtype,
-                                       copy=copy)
+                                       copy=copy, copy_indices=self._init_indices)
             else:
                 raise ValueError('Elements in list initialization must be '
                                  'either Column or list-like')
@@ -540,6 +675,7 @@ class Table(object):
         table = data  # data is really a Table, rename for clarity
         self.meta.clear()
         self.meta.update(deepcopy(table.meta))
+        self.primary_key = table.primary_key
         cols = list(table.columns.values())
 
         self._init_from_list(cols, names, dtype, n_cols, copy)
@@ -551,7 +687,7 @@ class Table(object):
         MaskedColumn if the table is masked.  Table subclasses like QTable
         override this method.
         """
-        if isinstance(col, Column) and not col.__class__ is self.ColumnClass:
+        if col.__class__ is not self.ColumnClass and isinstance(col, Column):
             col = self.ColumnClass(col)  # copy attributes and reference data
         return col
 
@@ -572,17 +708,26 @@ class Table(object):
         newcols = [self._convert_col_for_table(col) for col in cols]
         self._make_table_from_cols(self, newcols)
 
+
     def _new_from_slice(self, slice_):
         """Create a new table as a referenced slice from self."""
 
         table = self.__class__(masked=self.masked)
         table.meta.clear()
         table.meta.update(deepcopy(self.meta))
+        table.primary_key = self.primary_key
         cols = self.columns.values()
-        newcols = [col[slice_] for col in cols]
+
+        newcols = []
+        for col in cols:
+            col.info._copy_indices = self._copy_indices
+            newcol = col[slice_]
+            if col.info.indices:
+                newcol = col.info.slice_indices(newcol, slice_, len(col))
+            newcols.append(newcol)
+            col.info._copy_indices = True
 
         self._make_table_from_cols(table, newcols)
-
         return table
 
     @staticmethod
@@ -605,7 +750,34 @@ class Table(object):
 
         table.columns = columns
 
-    def _base_repr_(self, html=False, descr_vals=None, max_width=None, tableid=None):
+    def itercols(self):
+        """
+        Iterate over the columns of this table.
+
+        Examples
+        --------
+
+        To iterate over the columns of a table::
+
+            >>> t = Table([[1], [2]])
+            >>> for col in t.itercols():
+            ...     print(col)
+            col0
+            ----
+               1
+            col1
+            ----
+               2
+
+        Using ``itercols()`` is similar to  ``for col in t.columns.values()``
+        but is syntactically preferred.
+        """
+        for colname in self.columns:
+            yield self[colname]
+
+    def _base_repr_(self, html=False, descr_vals=None, max_width=None,
+                    tableid=None, show_dtype=True, max_lines=None,
+                    tableclass=None):
         if descr_vals is None:
             descr_vals = [self.__class__.__name__]
             if self.masked:
@@ -621,10 +793,10 @@ class Table(object):
         if tableid is None:
             tableid = 'table{id}'.format(id=id(self))
 
-        data_lines, outs = self.formatter._pformat_table(self, tableid=tableid, html=html,
-                                                         max_width=max_width,
-                                                         show_name=True, show_unit=None,
-                                                         show_dtype=True)
+        data_lines, outs = self.formatter._pformat_table(
+            self, tableid=tableid, html=html, max_width=max_width,
+            show_name=True, show_unit=None, show_dtype=show_dtype,
+            max_lines=max_lines, tableclass=tableclass)
 
         out = descr + '\n'.join(data_lines)
         if six.PY2 and isinstance(out, six.text_type):
@@ -633,7 +805,8 @@ class Table(object):
         return out
 
     def _repr_html_(self):
-        return self._base_repr_(html=True, max_width=-1)
+        return self._base_repr_(html=True, max_width=-1,
+                                tableclass=conf.default_notebook_table_class)
 
     def __repr__(self):
         return self._base_repr_(html=False, max_width=None)
@@ -669,7 +842,7 @@ class Table(object):
         return has_info_class(col, MixinInfo) and not isinstance(col, Quantity)
 
     def pprint(self, max_lines=None, max_width=None, show_name=True,
-               show_unit=None, show_dtype=False, align='right'):
+               show_unit=None, show_dtype=False, align=None):
         """Print a formatted string representation of the table.
 
         If no value of ``max_lines`` is supplied then the height of the
@@ -701,8 +874,12 @@ class Table(object):
         show_dtype : bool
             Include a header row for column dtypes (default=True)
 
-        align : str
-            Left/right alignment of a column. Default is 'right'.
+        align : str or list or tuple or `None`
+            Left/right alignment of columns. Default is right (None) for all
+            columns. Other allowed values are '>', '<', '^', and '0=' for
+            right, left, centered, and 0-padded, respectively. A list of
+            strings can be provided for alignment of tables with multiple
+            columns.
         """
         lines, outs = self.formatter._pformat_table(self, max_lines, max_width,
                                                     show_name=show_name, show_unit=show_unit,
@@ -718,20 +895,85 @@ class Table(object):
             else:
                 print(line)
 
-    def show_in_browser(self,
-                        css="table,th,td,tr,tbody {border: 1px solid black; border-collapse: collapse;}",
-                        max_lines=5000,
-                        jsviewer=False,
-                        jskwargs={'use_local_files': True},
-                        tableid=None,
-                        browser='default'):
-        """
-        Render the table in HTML and show it in a web browser.
+    def _make_index_row_display_table(self, index_row_name):
+        if index_row_name not in self.columns:
+            idx_col = self.ColumnClass(name=index_row_name, data=np.arange(len(self)))
+            return self.__class__([idx_col] + self.columns.values(),
+                                           copy=False)
+        else:
+            return self
+
+    def show_in_notebook(self, tableid=None, css=None, display_length=50,
+                         table_class='astropy-default', show_row_index='idx'):
+        """Render the table in HTML and show it in the IPython notebook.
 
         Parameters
         ----------
+        tableid : str or `None`
+            An html ID tag for the table.  Default is ``table{id}-XXX``, where
+            id is the unique integer id of the table object, id(self), and XXX
+            is a random number to avoid conflicts when printing the same table
+            multiple times.
+        table_class : str or `None`
+            A string with a list of HTML classes used to style the table.
+            The special default string ('from-apy-default') means that the string
+            will be retreived from the configuration item
+            ``astropy.table.default_notebook_table_class``. Note that these
+            table classes may make use of bootstrap, as this is loaded with the
+            notebook.  See `this page <http://getbootstrap.com/css/#tables>`_
+            for the list of classes.
         css : string
-            A valid CSS string declaring the formatting for the table
+            A valid CSS string declaring the formatting for the table. Default
+            to ``astropy.table.jsviewer.DEFAULT_CSS_NB``.
+        display_length : int, optional
+            Number or rows to show. Defaults to 50.
+        show_row_index : str or False
+            If this does not evaulate to False, a column with the given name
+            will be added to the version of the table that gets displayed.
+            This new column shows the index of the row in the table itself,
+            even when the displayed table is re-sorted by another column. Note
+            that if a column with this name already exists, this option will be
+            ignored. Defaults to "idx".
+
+        Notes
+        -----
+        Currently, unlike `show_in_browser` (with ``jsviewer=True``), this
+        method needs to access online javascript code repositories.  This is due
+        to modern browsers' limitations on accessing local files.  Hence, if you
+        call this method while offline (and don't have a cached version of
+        jquery and jquery.dataTables), you will not get the jsviewer features.
+        """
+
+        from .jsviewer import JSViewer
+        from IPython.display import HTML
+
+        if tableid is None:
+            tableid = 'table{0}-{1}'.format(id(self),
+                                            np.random.randint(1, 1e6))
+
+        jsv = JSViewer(display_length=display_length)
+        if show_row_index:
+            display_table = self._make_index_row_display_table(show_row_index)
+        else:
+            display_table = self
+        if table_class == 'astropy-default':
+            table_class = conf.default_notebook_table_class
+        html = display_table._base_repr_(html=True, max_width=-1, tableid=tableid,
+                                         max_lines=-1, show_dtype=False,
+                                         tableclass=table_class)
+
+        html += jsv.ipynb(tableid, css=css)
+        return HTML(html)
+
+    def show_in_browser(self, max_lines=5000, jsviewer=False,
+                        browser='default', jskwargs={'use_local_files': True},
+                        tableid=None, table_class="display compact",
+                        css=None, show_row_index=True):
+
+        """Render the table in HTML and show it in a web browser.
+
+        Parameters
+        ----------
         max_lines : int
             Maximum number of rows to export to the table (set low by default
             to avoid memory issues, since the browser view requires duplicating
@@ -741,18 +983,32 @@ class Table(object):
             If `True`, prepends some javascript headers so that the table is
             rendered as a `DataTables <https://datatables.net>`_ data table.
             This allows in-browser searching & sorting.
-        jskwargs : dict
-            Passed to the `astropy.table.JSViewer` init. Default to
-            ``{'use_local_files': True}`` which means that the JavaScipt
-            librairies will be served from local copies.
-        tableid : str or `None`
-            An html ID tag for the table.  Default is ``table{id}``, where id
-            is the unique integer id of the table object, id(self).
         browser : str
             Any legal browser name, e.g. ``'firefox'``, ``'chrome'``,
             ``'safari'`` (for mac, you may need to use ``'open -a
             "/Applications/Google Chrome.app" %s'`` for Chrome).  If
             ``'default'``, will use the system default browser.
+        jskwargs : dict
+            Passed to the `astropy.table.JSViewer` init. Defaults to
+            ``{'use_local_files': True}`` which means that the JavaScript
+            libraries will be served from local copies.
+        tableid : str or `None`
+            An html ID tag for the table.  Default is ``table{id}``, where id
+            is the unique integer id of the table object, id(self).
+        table_class : str or `None`
+            A string with a list of HTML classes used to style the table.
+            Default is "display compact", and other possible values can be
+            found in http://www.datatables.net/manual/styling/classes
+        css : string
+            A valid CSS string declaring the formatting for the table. Defaults
+            to ``astropy.table.jsviewer.DEFAULT_CSS``.
+        show_row_index : bool
+            If this does not evaulate to False, a column with the given name
+            will be added to the version of the table that gets displayed.
+            This new column shows the index of the row in the table itself,
+            even when the displayed table is re-sorted by another column. Note
+            that if a column with this name already exists, this option will be
+            ignored. Defaults to "idx".
         """
 
         import os
@@ -760,17 +1016,25 @@ class Table(object):
         import tempfile
         from ..extern.six.moves.urllib.parse import urljoin
         from ..extern.six.moves.urllib.request import pathname2url
+        from .jsviewer import DEFAULT_CSS
+
+        if css is None:
+            css = DEFAULT_CSS
 
         # We can't use NamedTemporaryFile here because it gets deleted as
         # soon as it gets garbage collected.
-
         tmpdir = tempfile.mkdtemp()
         path = os.path.join(tmpdir, 'table.html')
 
         with open(path, 'w') as tmp:
             if jsviewer:
-                self.write(tmp, format='jsviewer', css=css, max_lines=max_lines,
-                           jskwargs=jskwargs, table_id=tableid)
+                if show_row_index:
+                    display_table = self._make_index_row_display_table(show_row_index)
+                else:
+                    display_table = self
+                display_table.write(tmp, format='jsviewer', css=css,
+                                    max_lines=max_lines, jskwargs=jskwargs,
+                                    table_id=tableid, table_class=table_class)
             else:
                 self.write(tmp, format='html')
 
@@ -783,7 +1047,7 @@ class Table(object):
 
     def pformat(self, max_lines=None, max_width=None, show_name=True,
                 show_unit=None, show_dtype=False, html=False, tableid=None,
-                align='right'):
+                align=None, tableclass=None):
         """Return a list of lines for the formatted string representation of
         the table.
 
@@ -824,8 +1088,16 @@ class Table(object):
             "table{id}", where id is the unique integer id of the table object,
             id(self)
 
-        align : str
-            Left/right alignment of a column. Default is 'right'.
+        align : str or list or tuple or `None`
+            Left/right alignment of columns. Default is right (None) for all
+            columns. Other allowed values are '>', '<', '^', and '0=' for
+            right, left, centered, and 0-padded, respectively. A list of
+            strings can be provided for alignment of tables with multiple
+            columns.
+
+        tableclass : str or list of str or `None`
+            CSS classes for the table; only used if html is set.  Default is
+            none
 
         Returns
         -------
@@ -834,10 +1106,10 @@ class Table(object):
 
         """
 
-        lines, outs = self.formatter._pformat_table(self, max_lines, max_width,
-                                                    show_name=show_name, show_unit=show_unit,
-                                                    show_dtype=show_dtype, html=html,
-                                                    tableid=tableid, align=align)
+        lines, outs = self.formatter._pformat_table(
+            self, max_lines, max_width, show_name=show_name,
+            show_unit=show_unit, show_dtype=show_dtype, html=html,
+            tableid=tableid, tableclass=tableclass, align=align)
 
         if outs['show_length']:
             lines.append('Length = {0} rows'.format(len(self)))
@@ -893,7 +1165,9 @@ class Table(object):
             if bad_names:
                 raise ValueError('Slice name(s) {0} not valid column name(s)'
                                  .format(', '.join(bad_names)))
-            out = self.__class__([self[x] for x in item], meta=deepcopy(self.meta))
+            out = self.__class__([self[x] for x in item],
+                                 meta=deepcopy(self.meta),
+                                 copy_indices=self._copy_indices)
             out._groups = groups.TableGroups(out, indices=self.groups._indices,
                                              keys=self.groups._keys)
             return out
@@ -919,7 +1193,6 @@ class Table(object):
         # If that column doesn't already exist then create it now.
         if isinstance(item, six.string_types) and item not in self.colnames:
             NewColumn = self.MaskedColumn if self.masked else self.Column
-
             # If value doesn't have a dtype and won't be added as a mixin then
             # convert to a numpy array.
             if not hasattr(value, 'dtype') and not self._add_as_mixin_column(value):
@@ -1295,6 +1568,36 @@ class Table(object):
 
         self._init_from_cols(newcols)
 
+    def replace_column(self, name, col):
+        """
+        Replace column ``name`` with the new ``col`` object.
+
+        Parameters
+        ----------
+        name : str
+            Name of column to replace
+        col : column object (list, ndarray, Column, etc)
+            New column object to replace the existing column
+
+        Examples
+        --------
+        Replace column 'a' with a float version of itself::
+
+            >>> t = Table([[1, 2, 3], [0.1, 0.2, 0.3]], names=('a', 'b'))
+            >>> float_a = t['a'].astype(float)
+            >>> t.replace_column('a', float_a)
+        """
+        if name not in self.colnames:
+            raise ValueError('column name {0} is not in the table'.format(name))
+
+        if self[name].info.indices:
+            raise ValueError('cannot replace a table index column')
+
+        t = self.__class__([col], names=[name])
+        cols = OrderedDict(self.columns)
+        cols[name] = t[name]
+        self._init_from_cols(cols.values())
+
     def remove_row(self, index):
         """
         Remove a row from the table.
@@ -1377,6 +1680,10 @@ class Table(object):
               2 0.2   y
               3 0.3   z
         """
+        # Update indices
+        for index in self.indices:
+            index.remove_rows(row_specifier)
+
         keep_mask = np.ones(len(self), dtype=np.bool)
         keep_mask[row_specifier] = False
 
@@ -1386,7 +1693,7 @@ class Table(object):
             newcol.info.parent_table = self
             columns[name] = newcol
 
-        self.columns = columns
+        self._replace_cols(columns)
 
         # Revert groups to default (ungrouped) state
         if hasattr(self, '_groups'):
@@ -1850,15 +2157,28 @@ class Table(object):
 
                 columns[name] = newcol
 
+            # insert row in indices
+            for table_index in self.indices:
+                table_index.insert_row(index, vals, self.columns.values())
+
         except Exception as err:
             raise ValueError("Unable to insert row because of exception in column '{0}':\n{1}"
                              .format(name, err))
         else:
-            self.columns = columns
+            self._replace_cols(columns)
 
             # Revert groups to default (ungrouped) state
             if hasattr(self, '_groups'):
                 del self._groups
+
+    def _replace_cols(self, columns):
+        for col, new_col in zip(self.columns.values(), columns.values()):
+            new_col.info.indices = []
+            for index in col.info.indices:
+                index.columns[index.col_position(col.info.name)] = new_col
+                new_col.info.indices.append(index)
+
+        self.columns = columns
 
     def argsort(self, keys=None, kind=None):
         """
@@ -1881,6 +2201,13 @@ class Table(object):
         """
         if isinstance(keys, six.string_types):
             keys = [keys]
+
+        # use index sorted order if possible
+        if keys is not None:
+            index = get_index(self, self[keys])
+            if index is not None:
+                return index.sorted_data()
+
         kwargs = {}
         if keys:
             kwargs['order'] = keys
@@ -1892,13 +2219,9 @@ class Table(object):
         else:
             data = self.as_array()
 
-        if _BROKEN_UNICODE_TABLE_SORT and keys is not None and any(
-                data.dtype[i].kind == 'U' for i in xrange(len(data.dtype))):
-            return np.lexsort([data[key] for key in keys[::-1]])
-        else:
-            return data.argsort(**kwargs)
+        return data.argsort(**kwargs)
 
-    def sort(self, keys):
+    def sort(self, keys=None):
         '''
         Sort the table according to one or more keys. This operates
         on the existing table and does not return a new table.
@@ -1906,7 +2229,8 @@ class Table(object):
         Parameters
         ----------
         keys : str or list of str
-            The key(s) to order the table by
+            The key(s) to order the table by. If None, use the
+            primary index of the Table.
 
         Examples
         --------
@@ -1931,12 +2255,30 @@ class Table(object):
                    Jo  Miller  15
                   Max  Miller  12
         '''
-        if type(keys) is not list:
+        if keys is None:
+            if not self.indices:
+                raise ValueError("Table sort requires input keys or a table index")
+            keys = [x.info.name for x in self.indices[0].columns]
+
+        if isinstance(keys, six.string_types):
             keys = [keys]
 
         indexes = self.argsort(keys)
+        sort_index = get_index(self, self[keys])
+        if sort_index is not None:
+            # avoid inefficient relabelling of sorted index
+            prev_frozen = sort_index._frozen
+            sort_index._frozen = True
+
         for col in self.columns.values():
             col[:] = col.take(indexes, axis=0)
+
+        if sort_index is not None:
+            # undo index freeze
+            sort_index._frozen = prev_frozen
+            # now relabel the sort index appropriately
+            sort_index.sort()
+
 
     def reverse(self):
         '''
@@ -1968,6 +2310,8 @@ class Table(object):
         '''
         for col in self.columns.values():
             col[:] = col[::-1]
+        for index in self.indices:
+            index.reverse()
 
     @classmethod
     def read(cls, *args, **kwargs):
@@ -2223,7 +2567,7 @@ class QTable(Table):
 
     Parameters
     ----------
-    data : numpy ndarray, dict, list, or Table, optional
+    data : numpy ndarray, dict, list, Table, or table-like object, optional
         Data to initialize table.
     masked : bool, optional
         Specify whether the table is masked.
@@ -2237,23 +2581,18 @@ class QTable(Table):
         Copy the input data (default=True).
     rows : numpy ndarray, list of lists, optional
         Row-oriented data for table instead of ``data`` argument
+    copy_indices : bool, optional
+        Copy any indices in the input data (default=True)
+    **kwargs : dict, optional
+        Additional keyword args when converting table-like object
 
     """
-    def __init__(self, data=None, masked=None, names=None, dtype=None,
-                 meta=None, copy=True, rows=None):
-        super(QTable, self).__init__(data, masked, names, dtype, meta, copy, rows)
-
     def _add_as_mixin_column(self, col):
         """
         Determine if ``col`` should be added to the table directly as
         a mixin column.
         """
         return has_info_class(col, MixinInfo)
-
-    def __getstate__(self):
-        columns = dict((key, col if isinstance(col, BaseColumn) else col_copy(col))
-                for key, col in self.columns.items())
-        return (columns, self.meta)
 
     def _convert_col_for_table(self, col):
         if (isinstance(col, Column) and getattr(col, 'unit', None) is not None):
@@ -2267,7 +2606,9 @@ class QTable(Table):
 
 class NdarrayMixin(np.ndarray):
     """
-    Minimal mixin using a simple subclass of numpy array
+    Mixin column class to allow storage of arbitrary numpy
+    ndarrays within a Table.  This is a subclass of numpy.ndarray
+    and has the same initialization options as ndarray().
     """
     info = ParentDtypeInfo()
 
@@ -2305,4 +2646,3 @@ class NdarrayMixin(np.ndarray):
         nd_state, own_state = state
         super(NdarrayMixin, self).__setstate__(nd_state)
         self.__dict__.update(own_state)
-

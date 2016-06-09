@@ -69,8 +69,12 @@ def_unit(['oz', 'ounce'], 28.349523125 * si.g, namespace=_ns,
          doc="International avoirdupois ounce: mass")
 def_unit(['lb', 'lbm', 'pound'], 16 * oz, namespace=_ns,
          doc="International avoirdupois pound: mass")
+def_unit(['st', 'stone'], 14 * lb, namespace=_ns,
+         doc="International avoirdupois stone: mass")
 def_unit(['ton'], 2000 * lb, namespace=_ns,
          doc="International avoirdupois ton: mass")
+def_unit(['slug'], 32.174049 * lb, namespace=_ns,
+         doc="slug: mass")
 
 
 ###########################################################################
@@ -83,7 +87,7 @@ def_unit(['kn', 'kt', 'knot', 'NMPH'], nmi / si.h, namespace=_ns,
 ###########################################################################
 # FORCE
 
-def_unit('lbf', 32.174049 * lb * ft * si.s**-2, namespace=_ns,
+def_unit('lbf', slug * ft * si.s**-2, namespace=_ns,
          doc="Pound: force")
 def_unit(['kip', 'kilopound'], 1000 * lbf, namespace=_ns,
          doc="Kilopound: force")

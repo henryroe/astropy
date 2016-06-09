@@ -117,7 +117,7 @@ that all supported ASCII table formats will be tried in order to successfully
 parse the input.  For example::
 
   >>> t = Table.read('astropy/io/ascii/tests/t/latex1.tex', format='ascii')
-  >>> print t
+  >>> print(t)
   cola colb colc
   ---- ---- ----
      a    1    2
@@ -221,9 +221,12 @@ If the file already exists and you want to overwrite it, then set the
 
     >>> t.write('existing_table.fits', overwrite=True)
 
-At this time there is no support for appending an HDU to an existing file or
-writing multi-HDU files using the Table interface.  Instead one can use the
-lower-level :ref:`astropy.io.fits <astropy-io-fits>` interface.
+At this time there is no support for appending an HDU to an existing
+file or writing multi-HDU files using the Table interface. Instead one
+can use the convenience function
+:func:`~astropy.io.fits.table_to_hdu` to create a single
+binary table HDU and insert or append that to an existing
+:class:`~astropy.io.fits.HDUList`.
 
 Keywords
 """""""""
@@ -291,6 +294,12 @@ overwriting existing files. To overwrite only a single table within an HDF5
 file that has multiple datasets, use *both* the ``overwrite=True`` and
 ``append=True`` arguments.
 
+If the metadata of the table cannot be written directly to the HDF5 file 
+(e.g. dictionaries), or if you want to preserve the units and description
+of tables and columns, use using ``serialize_meta=True``::
+
+    >>> t.write('observations.hdf5', path='updated_data', serialize_meta=True)
+ 
 Finally, when writing to HDF5 files, the ``compression=`` argument can be
 used to ensure that the data is compressed on disk::
 

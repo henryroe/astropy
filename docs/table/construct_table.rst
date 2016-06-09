@@ -36,7 +36,7 @@ size, columns, or data are not known.
 .. Note::
    Adding rows requires making a new copy of the entire
    table each time, so in the case of large tables this may be slow.
-   On the other hand, adding columns is quite fast.
+   On the other hand, adding columns is reasonably fast.
 
 ::
 
@@ -51,6 +51,17 @@ size, columns, or data are not known.
 
   >>> t = Table(dtype=[('a', 'f4'), ('b', 'i4'), ('c', 'S2')])
 
+Another option for creating a table is using the `~astropy.table.QTable` class.
+In this case any `~astropy.units.Quantity` column objects will be stored
+natively within the table via the "mixin" column protocol (see `Columns and
+Quantities`_ for details)::
+
+  >>> from astropy.table import QTable
+  >>> from astropy import units as u
+  >>> t = QTable()
+  >>> t['velocity'] = [3, 4] * u.m / u.s
+  >>> type(t['velocity'])  # doctest: +SKIP
+  astropy.units.quantity.Quantity
 
 List of columns
 """""""""""""""
@@ -143,7 +154,7 @@ A dictionary of column data can be used to initialize a |Table|.
 **Specify the column order and optionally the data types**
 ::
 
-  >>> Table(arr, names=('a', 'b', 'c'), dtype=('f8', 'i4', 'S2'))
+  >>> Table(arr, names=('a', 'b', 'c'), dtype=('f8', 'i4', 'S2'))  # doctest: +IGNORE_OUTPUT_3
   <Table length=2>
      a      b    c
   float64 int32 str2
@@ -264,7 +275,7 @@ created using::
 
 From ``arr`` it is simple to create the corresponding |Table| object::
 
-  >>> Table(arr)
+  >>> Table(arr)  # doctest: +IGNORE_OUTPUT_3
   <Table length=2>
     a      b     c
   int32 float64 str2
@@ -277,7 +288,7 @@ table and immediately asking the interactive Python interpreter to print the
 table to see what we made.  In real code you might do something like::
 
   >>> table = Table(arr)
-  >>> print table
+  >>> print(table)
    a   b   c
   --- --- ---
     1 2.0   x
@@ -288,7 +299,7 @@ table to see what we made.  In real code you might do something like::
 The column names can be changed from the original values by providing the
 ``names`` argument::
 
-  >>> Table(arr, names=('a_new', 'b_new', 'c_new'))
+  >>> Table(arr, names=('a_new', 'b_new', 'c_new'))  # doctest: +IGNORE_OUTPUT_3
   <Table length=2>
   a_new  b_new  c_new
   int32 float64  str2
@@ -301,7 +312,7 @@ The column names can be changed from the original values by providing the
 
 Likewise the data type for each column can by changed with ``dtype``::
 
-  >>> Table(arr, dtype=('f4', 'i4', 'S4'))
+  >>> Table(arr, dtype=('f4', 'i4', 'S4'))  # doctest: +IGNORE_OUTPUT_3
   <Table length=2>
      a      b    c
   float32 int32 str4
@@ -309,7 +320,7 @@ Likewise the data type for each column can by changed with ``dtype``::
       1.0     2    x
       4.0     5    y
 
-  >>> Table(arr, names=('a_new', 'b_new', 'c_new'), dtype=('f4', 'i4', 'S4'))
+  >>> Table(arr, names=('a_new', 'b_new', 'c_new'), dtype=('f4', 'i4', 'S4'))  # doctest: +IGNORE_OUTPUT_3
   <Table length=2>
    a_new  b_new c_new
   float32 int32  str4
@@ -351,7 +362,7 @@ generated as ``col<N>`` where ``<N>`` is the column number.
 **Column names and types specified**
 ::
 
-  >>> Table(arr, names=('a_new', 'b_new', 'c_new'), dtype=('f4', 'i4', 'S4'))
+  >>> Table(arr, names=('a_new', 'b_new', 'c_new'), dtype=('f4', 'i4', 'S4'))  # doctest: +IGNORE_OUTPUT_3
   <Table length=2>
    a_new  b_new c_new
   float32 int32  str4
@@ -394,8 +405,8 @@ This dichotomy is needed to support flexible list input while retaining the
 natural interpretation of 2-d `numpy` arrays where the first index corresponds
 to data "rows" and the second index corresponds to data "columns".
 
-Table columns
-"""""""""""""
+From existing table
+""""""""""""""""""""
 A new table can be created by selecting a subset of columns in an existing
 table::
 
@@ -421,6 +432,25 @@ columns by their numerical index or name and supports slicing syntax::
      a       c
   float64 float64
   ------- -------
+
+To create a copy of an existing table that is empty (has no rows)::
+
+ >>> t = Table([[1.0, 2.3], [2.1, 3]], names=['x', 'y'])
+ >>> t
+ <Table length=2>
+    x       y
+ float64 float64
+ ------- -------
+     1.0     2.1
+     2.3     3.0
+
+ >>> tcopy = t[:0].copy()
+ >>> tcopy
+ <Table length=0>
+    x       y
+ float64 float64
+ ------- -------
+
 
 Initialization Details
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -497,6 +527,10 @@ for the ``data`` argument.
     correspond to the order of output columns.  If any row's keys do no match
     the rest of the rows, a ValueError will be thrown.
 
+**table-like object**
+    If another table-like object has a ``__astropy_table__`` method then
+    that object can be used to directly create a ``Table`` object.  See
+    the `Table-like objects`_ section for details.
 
 **None**
     Initialize a zero-length table.  If ``names`` and optionally ``dtype``
@@ -571,11 +605,11 @@ linked, as shown below::
   >>> arr = np.array([(1, 2.0, 'x'),
   ...                 (4, 5.0, 'y')],
   ...                dtype=[('a', 'i8'), ('b', 'f8'), ('c', 'S2')])
-  >>> print arr['a']  # column "a" of the input array
+  >>> print(arr['a'])  # column "a" of the input array
   [1 4]
   >>> t = Table(arr, copy=False)
   >>> t['a'][1] = 99
-  >>> print arr['a']  # arr['a'] got changed when we modified t['a']
+  >>> print(arr['a'])  # arr['a'] got changed when we modified t['a']
   [ 1 99]
 
 Note that when referencing the data it is not possible to change the data types
@@ -894,3 +928,132 @@ fields.  This might look something like::
                   return self.MaskedColumn(name=item, data=values, mask=mask)
 
           # ... and then the rest of the original __getitem__ ...
+
+Columns and Quantities
+""""""""""""""""""""""
+
+Astropy `~astropy.units.Quantity` objects can be handled within tables in two
+complementary ways.  The first method stores the `~astropy.units.Quantity`
+object natively within the table via the "mixin" column protocol.  See the
+sections on :ref:`mixin_columns` and :ref:`quantity_and_qtable` for details,
+but in brief the key difference is using the `~astropy.table.QTable` class to
+indicate that a `~astropy.units.Quantity` should be stored natively within the
+table::
+
+  >>> from astropy.table import QTable
+  >>> from astropy import units as u
+  >>> t = QTable()
+  >>> t['velocity'] = [3, 4] * u.m / u.s
+  >>> type(t['velocity'])  # doctest: +SKIP
+  astropy.units.quantity.Quantity
+
+For new code that is quantity-aware we recommend using `~astropy.table.QTable`,
+but this may not be possible in all situations (particularly when interfacing
+with legacy code that does not handle quantities) and there are
+:ref:`details_and_caveats` that apply.  In this case use the
+`~astropy.table.Table` class, which will convert a `~astropy.units.Quantity` to
+a `~astropy.table.Column` object with a ``unit`` attribute::
+
+  >>> from astropy.table import Table
+  >>> t = Table()
+  >>> t['velocity'] = [3, 4] * u.m / u.s
+  >>> type(t['velocity'])  # doctest: +SKIP
+  astropy.table.column.Column
+  >>> t['velocity'].unit
+  Unit("m / s")
+
+To learn more about using standard `~astropy.table.Column` objects with defined
+units, see the :ref:`columns_with_units` section.
+
+
+Table-like objects
+^^^^^^^^^^^^^^^^^^
+
+In order to improve interoperability between different table classes, an
+astropy |Table| object can be created directly from any other table-like
+object that provides an ``__astropy_table__`` method.  In this case the
+``__astropy_table__`` method will be called as follows::
+
+  >>> data = SomeOtherTableClass({'a': [1, 2], 'b': [3, 4]})  # doctest: +SKIP
+  >>> t = QTable(data, copy=False, strict_copy=True)  # doctest: +SKIP
+
+Internally the following call will be made to ask the ``data`` object
+to return a representation of itself as an astropy |Table|, respecting
+the ``copy`` preference of the original call to ``QTable()``::
+
+  data.__astropy_table__(cls, copy, **kwargs)
+
+Here ``cls`` is the |Table| class or subclass that is being instantiated
+(|QTable| in this example), ``copy`` indicates whether a copy of the values in
+``data`` should be provided, and ``**kwargs`` are any extra keyword arguments
+which are not valid |Table| init keyword arguments.  In the example above,
+``strict_copy=True`` would end up in ``**kwargs`` and get passed to
+``__astropy_table__()``.
+
+If ``copy`` is ``True`` then the ``__astropy_table__`` method must ensure that
+a copy of the original data is returned.  If ``copy`` is ``False`` then a
+reference to the table data should returned if possible.  If it is not possible
+(e.g. the original data are in a Python list or must be otherwise transformed in
+memory) then ``__astropy_table__`` method is free to either return a copy or
+else raise an exception.  This choice depends on the preference of the
+implementation.  The implementation might choose to allow an additional keyword
+argument (e.g. ``strict_copy`` which gets passed via ``**kwargs``) to control the
+behavior in this case.
+
+As a simple example, imagine a dict-based table class.  (Note that |Table|
+already can be initialized from a dict-like object, so this is a bit contrived
+but does illustrate the principles involved.)  Please pay attention to the
+method signature::
+
+  def __astropy_table__(self, cls, copy, **kwargs):
+
+Your class implementation of this must use the ``**kwargs`` technique for
+catching keyword arguments at the end.  This is to ensure future compatibility
+in case additional keywords are added to the internal ``table =
+data.__astropy_table__(cls, copy)`` call.  Including ``**kwargs`` will prevent
+breakage in this case.  ::
+
+  class DictTable(dict):
+      """
+      Trivial "table" class that just uses a dict to hold columns.
+      This does not actually implement anything useful that makes
+      this a table.
+
+      The non-standard ``strict_copy=False`` keyword arg here will be passed
+      via the **kwargs of Table __init__().
+      """
+
+      def __astropy_table__(self, cls, copy, strict_copy=False, **kwargs):
+          """
+          Return an astropy Table of type ``cls``.
+
+          Parameters
+          ----------
+          cls : type
+               Astropy ``Table`` class or subclass
+          copy : bool
+               Copy input data (True) or return a reference (False)
+          strict_copy : bool, optional
+               Raise an exception if copy is False but reference is not
+               possible
+          **kwargs : dict, optional
+               Additional keyword args (ignored currently)
+          """
+          if kwargs:
+              warnings.warn('unexpected keyword args {}'.format(kwargs))
+
+          cols = list(self.values())
+          names = list(self.keys())
+
+          # If returning a reference to existing data (copy=False) and
+          # strict_copy=True, make sure that each column is a numpy ndarray.
+          # If a column is a Python list or tuple then it must be copied for
+          # representation in an astropy Table.
+
+          if not copy and strict_copy:
+              for name, col in zip(names, cols):
+                  if not isinstance(col, np.ndarray):
+                      raise ValueError('cannot have copy=False because column {} is '
+                                       'not an ndarray'.format(name))
+
+          return cls(cols, names=names, copy=copy)

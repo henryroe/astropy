@@ -22,9 +22,10 @@ import inspect
 import functools
 import operator
 import sys
+import types
 import warnings
 
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from itertools import chain, islice
 
 import numpy as np
@@ -33,22 +34,23 @@ from ..utils import indent, isinstancemethod, metadata
 from ..extern import six
 from ..extern.six.moves import copyreg
 from ..table import Table
-from ..utils import (deprecated, sharedmethod, find_current_module,
+from ..utils import (sharedmethod, find_current_module,
                      InheritDocstrings, OrderedDescriptorContainer)
 from ..utils.codegen import make_function_with_signature
-from ..utils.compat.odict import OrderedDict
-from ..utils.compat import ignored
+from ..utils.compat import suppress
+from ..utils.compat.funcsigs import signature
 from ..utils.exceptions import AstropyDeprecationWarning
 from .utils import (array_repr_oneline, check_broadcast, combine_labels,
                     make_binary_operator_eval, ExpressionTree,
-                    IncompatibleShapeError, AliasDict, get_inputs_and_params)
+                    IncompatibleShapeError, AliasDict, get_inputs_and_params,
+                    _BoundingBox)
 from ..nddata.utils import add_array, extract_array
 
 from .parameters import Parameter, InputParameterError
 
 
 __all__ = ['Model', 'FittableModel', 'Fittable1DModel', 'Fittable2DModel',
-           'custom_model', 'ModelDefinitionError', 'render_model']
+           'custom_model', 'ModelDefinitionError']
 
 
 class ModelDefinitionError(TypeError):
@@ -126,7 +128,7 @@ class _ModelMeta(OrderedDescriptorContainer, InheritDocstrings, abc.ABCMeta):
                 cls.param_names = tuple(cls._parameters_)
 
         cls._create_inverse_property(members)
-        cls._handle_backwards_compat(name, members)
+        cls._create_bounding_box_property(members)
         cls._handle_special_methods(members)
 
         if not inspect.isabstract(cls) and not name.startswith('_'):
@@ -246,53 +248,113 @@ class _ModelMeta(OrderedDescriptorContainer, InheritDocstrings, abc.ABCMeta):
 
     def _create_inverse_property(cls, members):
         inverse = members.get('inverse')
-        if inverse is None:
+        if inverse is None or cls.__bases__[0] is object:
+            # The latter clause is the prevent the below code from running on
+            # the Model base class, which implements the default getter and
+            # setter for .inverse
             return
 
         if isinstance(inverse, property):
-            fget = inverse.fget
-        else:
             # We allow the @property decorator to be omitted entirely from
             # the class definition, though its use should be encouraged for
             # clarity
-            fget = inverse
+            inverse = inverse.fget
 
-        def wrapped_fget(self):
-            if self._custom_inverse is not None:
-                return self._custom_inverse
+        # Store the inverse getter internally, then delete the given .inverse
+        # attribute so that cls.inverse resolves to Model.inverse instead
+        cls._inverse = inverse
+        del cls.inverse
 
-            return fget(self)
+    def _create_bounding_box_property(cls, members):
+        """
+        Takes any bounding_box defined on a concrete Model subclass (either
+        as a fixed tuple or a property or method) and wraps it in the generic
+        getter/setter interface for the bounding_box attribute.
+        """
 
-        def fset(self, value):
-            if not isinstance(value, (Model, type(None))):
-                raise ValueError(
-                    "The ``inverse`` attribute may be assigned a `Model` "
-                    "instance or `None` (where `None` restores the default "
-                    "inverse for this model if one is defined.")
+        # TODO: Much of this is verbatim from _create_inverse_property--I feel
+        # like there could be a way to generify properties that work this way,
+        # but for the time being that would probably only confuse things more.
+        bounding_box = members.get('bounding_box')
+        if bounding_box is None or cls.__bases__[0] is object:
+            return
 
-            self._custom_inverse = value
+        if isinstance(bounding_box, property):
+            bounding_box = bounding_box.fget
 
-        cls.inverse = property(wrapped_fget, fset, doc=inverse.__doc__)
+        if not callable(bounding_box):
+            # See if it's a hard-coded bounding_box (as a sequence) and
+            # normalize it
+            try:
+                bounding_box = _BoundingBox.validate(cls, bounding_box)
+            except AssertionError as exc:
+                raise ModelDefinitionError(exc.args[0])
+        else:
+            sig = signature(bounding_box)
+            # May be a method that only takes 'self' as an argument (like a
+            # property, but the @property decorator was forgotten)
+            # TODO: Maybe warn in the above case?
+            #
+            # However, if the method takes additional arguments then this is a
+            # parameterized bounding box and should be callable
+            if len(sig.parameters) > 1:
+                bounding_box = \
+                        cls._create_bounding_box_subclass(bounding_box, sig)
 
-    def _handle_backwards_compat(cls, name, members):
-        # Backwards compatibility check for 'eval' -> 'evaluate'
-        # TODO: Remove sometime after Astropy 1.0 release.
-        if 'eval' in members and 'evaluate' not in members:
-            warnings.warn(
-                "Use of an 'eval' method when defining subclasses of "
-                "FittableModel is deprecated; please rename this method to "
-                "'evaluate'.  Otherwise its semantics remain the same.",
-                AstropyDeprecationWarning)
-            cls.evaluate = members['eval']
-        elif ('evaluate' in members and callable(members['evaluate']) and
-                not getattr(members['evaluate'], '__isabstractmethod__',
-                            False)):
-            # Don't bother making a deprecated eval() except for concrete
-            # implementations of evaluate, so that we don't end up with an eval
-            # abstractmethod as well
-            alt = '.'.join((name, 'evaluate'))
-            deprecate = deprecated('1.0', alternative=alt, name='eval')
-            cls.eval = deprecate(members['evaluate'])
+        if six.PY2 and isinstance(bounding_box, types.MethodType):
+            bounding_box = bounding_box.__func__
+
+        # See the Model.bounding_box getter definition for how this attribute
+        # is used
+        cls._bounding_box = bounding_box
+        del cls.bounding_box
+
+    def _create_bounding_box_subclass(cls, func, sig):
+        """
+        For Models that take optional arguments for defining their bounding
+        box, we create a subclass of _BoundingBox with a ``__call__`` method
+        that supports those additional arguments.
+
+        Takes the function's Signature as an argument since that is already
+        computed in _create_bounding_box_property, so no need to duplicate that
+        effort.
+        """
+
+        # TODO: Might be convenient if calling the bounding box also
+        # automatically sets the _user_bounding_box.  So that
+        #
+        #    >>> model.bounding_box(arg=1)
+        #
+        # in addition to returning the computed bbox, also sets it, so that
+        # it's a shortcut for
+        #
+        #    >>> model.bounding_box = model.bounding_box(arg=1)
+        #
+        # Not sure if that would be non-obvious / confusing though...
+
+        def __call__(self, **kwargs):
+            return func(self._model, **kwargs)
+
+        kwargs = []
+        for idx, param in enumerate(sig.parameters.values()):
+            if idx == 0:
+                # Presumed to be a 'self' argument
+                continue
+
+            if param.default is param.empty:
+                raise ModelDefinitionError(
+                    'The bounding_box method for {0} is not correctly '
+                    'defined: If defined as a method all arguments to that '
+                    'method (besides self) must be keyword arguments with '
+                    'default values that can be used to compute a default '
+                    'bounding box.'.format(cls.name))
+
+            kwargs.append((param.name, param.default))
+
+        __call__ = make_function_with_signature(__call__, ('self',), kwargs)
+
+        return type(str('_{0}BoundingBox'.format(cls.name)), (_BoundingBox,),
+                    {'__call__': __call__})
 
     def _handle_special_methods(cls, members):
         # Handle init creation from inputs
@@ -579,12 +641,11 @@ class Model(object):
     # optionally; in that case it is of course up to the user to determine
     # whether their inverse is *actually* an inverse to the model they assign
     # it to.
-    _custom_inverse = None
+    _inverse = None
+    _user_inverse = None
 
-    # If a bounding_box_default function is defined in the model,
-    # then the _bounding_box attribute should be set to 'auto' in the model.
-    # Otherwise, the default is None for no bounding box.
     _bounding_box = None
+    _user_bounding_box = None
 
     # Default n_models attribute, so that __len__ is still defined even when a
     # model hasn't completed initialization yet
@@ -647,11 +708,6 @@ class Model(object):
         """User-provided name for this model instance."""
 
         return self._name
-
-    @property
-    @deprecated('0.4', alternative='len(model)')
-    def param_dim(self):
-        return self._n_models
 
     @property
     def n_inputs(self):
@@ -777,8 +833,6 @@ class Model(object):
 
         return self._constraints['ineqcons']
 
-    # *** Public methods ***
-
     @property
     def inverse(self):
         """
@@ -791,6 +845,10 @@ class Model(object):
         `~astropy.modeling.polynomial.PolynomialModel`, but not by
         requirement).
 
+        A custom inverse can be deleted with ``del model.inverse``.  In this
+        case the model's inverse is reset to its default, if a default exists
+        (otherwise the default is to raise `NotImplementedError`).
+
         Note to authors of `~astropy.modeling.Model` subclasses:  To define an
         inverse for a model simply override this property to return the
         appropriate model representing the inverse.  The machinery that will
@@ -798,8 +856,54 @@ class Model(object):
         base class.
         """
 
+        if self._user_inverse is not None:
+            return self._user_inverse
+        elif self._inverse is not None:
+            return self._inverse()
+
         raise NotImplementedError("An analytical inverse transform has not "
                                   "been implemented for this model.")
+
+    @inverse.setter
+    def inverse(self, value):
+        if not isinstance(value, (Model, type(None))):
+            raise ValueError(
+                "The ``inverse`` attribute may be assigned a `Model` "
+                "instance or `None` (where `None` restores the default "
+                "inverse for this model if one is defined.")
+
+        if value is None:
+            warnings.warn(
+                "Currently setting `model.inverse = None` resets the inverse "
+                "to the default inverse (if one exists).  However, starting "
+                "in Astropy 1.2, setting `model.inverse = None` explicitly "
+                "forces a model to have no inverse (such that accessing "
+                "`model.inverse` raises a NotImplementedError) even if that "
+                "model's class has a default inverse.\n\n"
+                "Instead, call `del model.inverse` to reset the inverse to "
+                "its default (if a default exists for that model's class--"
+                "otherwise the model is reset to having no inverse.",
+                AstropyDeprecationWarning)
+
+        self._user_inverse = value
+
+    @inverse.deleter
+    def inverse(self):
+        """
+        Resets the model's inverse to its default (if one exists, otherwise
+        the model will have no inverse).
+        """
+
+        del self._user_inverse
+
+    @property
+    def has_user_inverse(self):
+        """
+        A flag indicating whether or not a custom inverse model has been
+        assigned to this model by a user, via assignment to ``model.inverse``.
+        """
+
+        return self._user_inverse is not None
 
     @property
     def bounding_box(self):
@@ -807,14 +911,16 @@ class Model(object):
         A `tuple` of length `n_inputs` defining the bounding box limits, or
         `None` for no bounding box.
 
-        The default is `None`, unless ``bounding_box_default`` is defined.
-        `bounding_box` can be set manually to an array-like  object of shape
-        ``(model.n_inputs, 2)``. For further usage, including how to set the
-        ``bounding_box_default``, see :ref:`bounding-boxes`
+        The default limits are given by a ``bounding_box`` property or method
+        defined in the class body of a specific model.  If not defined then
+        this property just raises `NotImplementedError` by default (but may be
+        assigned a custom value by a user).  ``bounding_box`` can be set
+        manually to an array-like object of shape ``(model.n_inputs, 2)``. For
+        further usage, see :ref:`bounding-boxes`
 
         The limits are ordered according to the `numpy` indexing
         convention, and are the reverse of the model input order,
-        e.g. for inputs ``('x', 'y', 'z')`` the ``bounding_box`` is defined:
+        e.g. for inputs ``('x', 'y', 'z')``, ``bounding_box`` is defined:
 
         * for 1D: ``(x_low, x_high)``
         * for 2D: ``((y_low, y_high), (x_low, x_high))``
@@ -822,19 +928,18 @@ class Model(object):
 
         Examples
         --------
-        Setting the bounding boxes for a 1D, 2D, and custom 3D model.
 
-        >>> from astropy.modeling.models import Gaussian1D, Gaussian2D, custom_model
+        Setting the ``bounding_box`` limits for a 1D and 2D model:
+
+        >>> from astropy.modeling.models import Gaussian1D, Gaussian2D
         >>> model_1d = Gaussian1D()
         >>> model_2d = Gaussian2D(x_stddev=1, y_stddev=1)
-
-        Set the bounding box like:
-
         >>> model_1d.bounding_box = (-5, 5)
         >>> model_2d.bounding_box = ((-6, 6), (-5, 5))
 
-        For a user-defined 3D model:
+        Setting the bounding_box limits for a user-defined 3D `custom_model`:
 
+        >>> from astropy.modeling.models import custom_model
         >>> def const3d(x, y, z, amp=1):
         ...    return amp
         ...
@@ -842,56 +947,212 @@ class Model(object):
         >>> model_3d = Const3D()
         >>> model_3d.bounding_box = ((-6, 6), (-5, 5), (-4, 4))
 
-        To reset the default:
+        To reset ``bounding_box`` to its default limits just delete the
+        user-defined value--this will reset it back to the default defined
+        on the class:
 
-        >>> model_1d.bounding_box = 'auto'
+        >>> del model_1d.bounding_box
 
-        To turn off the bounding box:
+        To disable the bounding box entirely (including the default),
+        set ``bounding_box`` to `None`:
 
         >>> model_1d.bounding_box = None
-
+        >>> model_1d.bounding_box  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+          File "<stdin>", line 1, in <module>
+          File "astropy\modeling\core.py", line 980, in bounding_box
+            "No bounding box is defined for this model (note: the "
+        NotImplementedError: No bounding box is defined for this model (note:
+        the bounding box was explicitly disabled for this model; use `del
+        model.bounding_box` to restore the default bounding box, if one is
+        defined for this model).
         """
 
-        if self._bounding_box == 'auto':
-            return self.bounding_box_default()
-
-        else:
+        if self._user_bounding_box is not None:
+            if self._user_bounding_box is NotImplemented:
+                raise NotImplementedError(
+                    "No bounding box is defined for this model (note: the "
+                    "bounding box was explicitly disabled for this model; "
+                    "use `del model.bounding_box` to restore the default "
+                    "bounding box, if one is defined for this model).")
+            return self._user_bounding_box
+        elif self._bounding_box is None:
+            raise NotImplementedError(
+                    "No bounding box is defined for this model.")
+        elif isinstance(self._bounding_box, _BoundingBox):
+            # This typically implies a hard-coded bounding box.  This will
+            # probably be rare, but it is an option
             return self._bounding_box
+        elif isinstance(self._bounding_box, types.MethodType):
+            return self._bounding_box()
+        else:
+            # The only other allowed possibility is that it's a _BoundingBox
+            # subclass, so we call it with its default arguments and return an
+            # instance of it (that can be called to recompute the bounding box
+            # with any optional parameters)
+            # (In other words, in this case self._bounding_box is a *class*)
+            bounding_box = self._bounding_box((), _model=self)()
+            return self._bounding_box(bounding_box, _model=self)
 
     @bounding_box.setter
-    def bounding_box(self, limits):
+    def bounding_box(self, bounding_box):
         """
         Assigns the bounding box limits.
         """
 
-        if limits == 'auto':
-            if not hasattr(self, 'bounding_box_default'):
-                warnings.warn('The default for this model is None.')
-                limits = None
-
-        elif limits is None:
-            pass
-
+        if bounding_box is None:
+            cls = None
+            # We use this to explicitly set an unimplemented bounding box (as
+            # opposed to no user bounding box defined)
+            bounding_box = NotImplemented
+        elif (isinstance(self._bounding_box, type) and
+                issubclass(self._bounding_box, _BoundingBox)):
+            cls = self._bounding_box
         else:
-            nd = self.n_inputs
+            cls = _BoundingBox
+
+        if cls is not None:
             try:
-                if nd == 1:
-                    assert np.shape(limits) == (2,)
-                    limits = tuple(limits)
+                bounding_box = cls.validate(self, bounding_box)
+            except AssertionError as exc:
+                raise ValueError(exc.args[0])
 
-                else:
-                    assert np.shape(limits) == (nd, 2)
-                    limits = tuple([tuple(lim) for lim in limits])
+        self._user_bounding_box = bounding_box
 
-            except AssertionError:
-                raise AssertionError('If not \'auto\' or None, bounding_box must be '
-                                     'array-like of shape ``(model.n_inputs, 2)``.')
+    @bounding_box.deleter
+    def bounding_box(self):
+        self._user_bounding_box = None
 
-        self._bounding_box = limits
+    @property
+    def has_user_bounding_box(self):
+        """
+        A flag indicating whether or not a custom bounding_box has been
+        assigned to this model by a user, via assignment to
+        ``model.bounding_box``.
+        """
+
+        return self._user_bounding_box is not None
+
+    # *** Public methods ***
 
     @abc.abstractmethod
     def evaluate(self, *args, **kwargs):
         """Evaluate the model on some input variables."""
+
+    def render(self, out=None, coords=None):
+        """
+        Evaluate a model at fixed positions, respecting the ``bounding_box``.
+
+        The key difference relative to evaluating the model directly is that
+        this method is limited to a bounding box if the `Model.bounding_box`
+        attribute is set.
+
+        Parameters
+        ----------
+        out : `numpy.ndarray`, optional
+            An array that the evaluated model will be added to.  If this is not
+            given (or given as ``None``), a new array will be created.
+        coords : array-like, optional
+            An array to be used to translate from the model's input coordinates
+            to the ``out`` array. It should have the property that
+            ``self(coords)`` yields the same shape as ``out``.  If ``out`` is
+            not specified, ``coords`` will be used to determine the shape of the
+            returned array. If this is not provided (or None), the model will be
+            evaluated on a grid determined by `Model.bounding_box`.
+
+        Returns
+        -------
+        out : `numpy.ndarray`
+            The model added to ``out`` if  ``out`` is not ``None``, or else a
+            new array from evaluating the model over ``coords``.
+            If ``out`` and ``coords`` are both `None`, the returned array is
+            limited to the `Model.bounding_box` limits. If
+            `Model.bounding_box` is `None`, ``arr`` or ``coords`` must be passed.
+
+        Raises
+        ------
+        ValueError
+            If ``coords`` are not given and the the `Model.bounding_box` of this
+            model is not set.
+
+        Examples
+        --------
+        :ref:`bounding-boxes`
+        """
+
+        try:
+            bbox = self.bounding_box
+        except NotImplementedError:
+            bbox = None
+
+        ndim = self.n_inputs
+
+        if (coords is None) and (out is None) and (bbox is None):
+            raise ValueError('If no bounding_box is set, '
+                             'coords or out must be input.')
+
+        # for consistent indexing
+        if ndim == 1:
+            if coords is not None:
+                coords = [coords]
+            if bbox is not None:
+                bbox = [bbox]
+
+        if coords is not None:
+            coords = np.asanyarray(coords, dtype=float)
+            # Check dimensions match out and model
+            assert len(coords) == ndim
+            if out is not None:
+                assert coords[0].shape == out.shape
+            else:
+                out = np.zeros(coords[0].shape)
+
+        if out is not None:
+            out = np.asanyarray(out, dtype=float)
+            try:
+                assert out.ndim == ndim
+            except AssertionError:
+                raise AssertionError(
+                    'The array and model must have the same number '
+                    'of dimensions.')
+
+        if bbox is not None:
+            # assures position is at center pixel, important when using add_array
+            pd = np.array([(np.mean(bb), np.ceil((bb[1] - bb[0]) / 2))
+                           for bb in bbox]).astype(int).T
+            pos, delta = pd
+
+            if coords is not None:
+                sub_shape = tuple(delta * 2 + 1)
+                sub_coords = np.array([extract_array(c, sub_shape, pos)
+                                       for c in coords])
+            else:
+                limits = [slice(p - d, p + d + 1, 1) for p, d in pd.T]
+                sub_coords = np.mgrid[limits]
+
+            sub_coords = sub_coords[::-1]
+
+            if out is None:
+                out = self(*sub_coords)
+            else:
+                try:
+                    out = add_array(out, self(*sub_coords), pos)
+                except ValueError:
+                    raise ValueError(
+                        'The `bounding_box` is larger than the input out in '
+                        'one or more dimensions. Set '
+                        '`model.bounding_box = None`.')
+        else:
+            if coords is None:
+                im_shape = out.shape
+                limits = [slice(i) for i in im_shape]
+                coords = np.mgrid[limits]
+
+            coords = coords[::-1]
+
+            out += self(*coords)
+
+        return out
 
     def prepare_inputs(self, *inputs, **kwargs):
         """
@@ -932,38 +1193,6 @@ class Model(object):
             return _prepare_outputs_single_model(self, outputs, format_info)
         else:
             return _prepare_outputs_model_set(self, outputs, format_info)
-
-    @deprecated('1.0',
-                alternative='Use Model operators (TODO: link to compound '
-                            'model docs')
-    def add_model(self, model, mode):
-        """
-        Create a CompositeModel by chaining the current model with the new one
-        using the specified mode.
-
-        Parameters
-        ----------
-        model : an instance of a subclass of Model
-        mode :  string
-               'parallel', 'serial', 'p' or 's'
-               a flag indicating whether to combine the models
-               in series or in parallel
-
-        Returns
-        -------
-        model : CompositeModel
-            an instance of CompositeModel
-        """
-
-        from ._compound_deprecated import (SummedCompositeModel,
-                                           SerialCompositeModel)
-
-        if mode in ['parallel', 'p']:
-            return SummedCompositeModel([self, model])
-        elif mode in ['serial', 's']:
-            return SerialCompositeModel([self, model])
-        else:
-            raise InputParameterError("Unrecognized mode {0}".format(mode))
 
     def copy(self):
         """
@@ -1078,24 +1307,10 @@ class Model(object):
             # an alternate initialization
             return
 
-        n_models = None
-        # Pop off param_dim and handle backwards compatibility
-        if 'param_dim' in kwargs:
-            n_models = kwargs.pop('param_dim')
-            warnings.warn(
-                'The param_dim argument to {0}.__init__ is deprecated; '
-                'use n_models instead.  See also the model_set_axis argument '
-                'and related discussion in the docstring for Model.'.format(
-                    self.__class__.__name__), AstropyDeprecationWarning)
-            if 'n_models' in kwargs:
-                raise TypeError(
-                    "param_dim and n_models cannot both be specified; use "
-                    "n_models, as param_dim is deprecated")
-        else:
-            n_models = kwargs.pop('n_models', None)
+        n_models = kwargs.pop('n_models', None)
 
         if not (n_models is None or
-                    (isinstance(n_models, int) and n_models >=1)):
+                    (isinstance(n_models, (int, np.integer)) and n_models >=1)):
             raise ValueError(
                 "n_models must be either None (in which case it is "
                 "determined from the model_set_axis of the parameter initial "
@@ -1447,7 +1662,6 @@ class Model(object):
 
         return '\n'.join(parts)
 
-
 class FittableModel(Model):
     """
     Base class for models that can be fitted using the built-in fitting
@@ -1581,7 +1795,7 @@ class _CompoundModelMeta(_ModelMeta):
     def __getitem__(cls, index):
         index = cls._normalize_index(index)
 
-        if isinstance(index, int):
+        if isinstance(index, (int, np.integer)):
             return cls._get_submodels()[index]
         else:
             return cls._get_slice(index.start, index.stop)
@@ -1602,8 +1816,7 @@ class _CompoundModelMeta(_ModelMeta):
             return cls._format_cls_repr()
 
         expression = cls._format_expression()
-        components = '\n\n'.join('[{0}]: {1!r}'.format(idx, m)
-                                 for idx, m in enumerate(cls._get_submodels()))
+        components = cls._format_components()
         keywords = [
             ('Expression', expression),
             ('Components', '\n' + indent(components))
@@ -1611,14 +1824,11 @@ class _CompoundModelMeta(_ModelMeta):
 
         return cls._format_cls_repr(keywords=keywords)
 
-    def __dir__(cls, *args):
+    def __dir__(cls):
         """
         Returns a list of attributes defined on a compound model, including
         all of its parameters.
         """
-
-        # The *args is to address a bug (?) on Python 2.6 where the dir()
-        # builtin calls __dir__ with an additional (unused) argument
 
         try:
             # Annoyingly, this will only work for Python 3.3+
@@ -1639,7 +1849,7 @@ class _CompoundModelMeta(_ModelMeta):
 
         if isinstance(rv, tuple):
             # Delete _evaluate from the members dict
-            with ignored(KeyError):
+            with suppress(KeyError):
                 del rv[1][2]['_evaluate']
 
         return rv
@@ -1764,37 +1974,7 @@ class _CompoundModelMeta(_ModelMeta):
         else:
             modname = '__main__'
 
-        # TODO: These aren't the full rules for handling inputs and outputs, but
-        # this will handle most basic cases correctly
-        if operator == '|':
-            inputs = left.inputs
-            outputs = right.outputs
-
-            if left.n_outputs != right.n_inputs:
-                raise ModelDefinitionError(
-                    "Unsupported operands for |: {0} (n_inputs={1}, "
-                    "n_outputs={2}) and {3} (n_inputs={4}, n_outputs={5}); "
-                    "n_outputs for the left-hand model must match n_inputs "
-                    "for the right-hand model.".format(
-                        left.name, left.n_inputs, left.n_outputs, right.name,
-                        right.n_inputs, right.n_outputs))
-        elif operator == '&':
-            inputs = combine_labels(left.inputs, right.inputs)
-            outputs = combine_labels(left.outputs, right.outputs)
-        else:
-            # Without loss of generality
-            inputs = left.inputs
-            outputs = left.outputs
-
-            if (left.n_inputs != right.n_inputs or
-                    left.n_outputs != right.n_outputs):
-                raise ModelDefinitionError(
-                    "Unsupported operands for {0}: {1} (n_inputs={2}, "
-                    "n_outputs={3}) and {4} (n_inputs={5}, n_outputs={6}); "
-                    "models must have the same n_inputs and the same "
-                    "n_outputs for this operator".format(
-                        operator, left.name, left.n_inputs, left.n_outputs,
-                        right.name, right.n_inputs, right.n_outputs))
+        inputs, outputs = mcls._check_inputs_and_outputs(operator, left, right)
 
         if operator in ('|', '+', '-'):
             linear = left.linear and right.linear
@@ -1832,7 +2012,7 @@ class _CompoundModelMeta(_ModelMeta):
             # intermediate compound models are stored in the tree as well then
             # we can immediately check for custom inverses on sub-models when
             # computing the inverse
-            instance._custom_inverse = mcls._make_custom_inverse(
+            instance._user_inverse = mcls._make_user_inverse(
                     operator, left, right)
 
             return instance
@@ -1841,17 +2021,43 @@ class _CompoundModelMeta(_ModelMeta):
         return new_cls
 
     @classmethod
-    def _handle_backwards_compat(mcls, name, members):
-        # Override _handle_backwards_compat from _ModelMeta to be a no-op; it
-        # is not needed since compound models did not exist before version 1.0
-        # anyways.
+    def _check_inputs_and_outputs(mcls, operator, left, right):
+        # TODO: These aren't the full rules for handling inputs and outputs, but
+        # this will handle most basic cases correctly
+        if operator == '|':
+            inputs = left.inputs
+            outputs = right.outputs
 
-        # TODO: Remove this at the same time as removing
-        # _ModelMeta._handle_backwards_compat
-        return
+            if left.n_outputs != right.n_inputs:
+                raise ModelDefinitionError(
+                    "Unsupported operands for |: {0} (n_inputs={1}, "
+                    "n_outputs={2}) and {3} (n_inputs={4}, n_outputs={5}); "
+                    "n_outputs for the left-hand model must match n_inputs "
+                    "for the right-hand model.".format(
+                        left.name, left.n_inputs, left.n_outputs, right.name,
+                        right.n_inputs, right.n_outputs))
+        elif operator == '&':
+            inputs = combine_labels(left.inputs, right.inputs)
+            outputs = combine_labels(left.outputs, right.outputs)
+        else:
+            # Without loss of generality
+            inputs = left.inputs
+            outputs = left.outputs
+
+            if (left.n_inputs != right.n_inputs or
+                    left.n_outputs != right.n_outputs):
+                raise ModelDefinitionError(
+                    "Unsupported operands for {0}: {1} (n_inputs={2}, "
+                    "n_outputs={3}) and {4} (n_inputs={5}, n_outputs={6}); "
+                    "models must have the same n_inputs and the same "
+                    "n_outputs for this operator".format(
+                        operator, left.name, left.n_inputs, left.n_outputs,
+                        right.name, right.n_inputs, right.n_outputs))
+
+        return inputs, outputs
 
     @classmethod
-    def _make_custom_inverse(mcls, operator, left, right):
+    def _make_user_inverse(mcls, operator, left, right):
         """
         Generates an inverse `Model` for this `_CompoundModel` when either
         model in the operation has a *custom inverse* that was manually
@@ -1873,7 +2079,7 @@ class _CompoundModelMeta(_ModelMeta):
         """
 
         if not (operator in ('&', '|') and
-                (left._custom_inverse or right._custom_inverse)):
+                (left._user_inverse or right._user_inverse)):
             # These are the only operators that support an inverse right now
             return None
 
@@ -1933,34 +2139,23 @@ class _CompoundModelMeta(_ModelMeta):
             submodel = cls[submodel_idx]
 
             orig_param = getattr(submodel, submodel_param, None)
-            if not isinstance(orig_param, Parameter):
-                # This is just a pathological case that is only really needed
-                # to support the deprecated _CompositeModel--composite models
-                # claim to have some parameters, but don't actually implement
-                # the parameter descriptors, so we just make one up basically,
-                # with a default value of zero.  This value will just be thrown
-                # away, basically.
-                # TODO: Remove this special case once the legacy interfaces
-                # have been removed (basically this entire if statement--keep
-                # only the parts in the else: clause.
-                new_param = Parameter(name=param_name, default=0)
+
+            if isinstance(submodel, Model):
+                # Take the parameter's default from the model's value for that
+                # parameter
+                default = orig_param.value
             else:
-                if isinstance(submodel, Model):
-                    # Take the parameter's default from the model's value for that
-                    # parameter
-                    default = orig_param.value
-                else:
-                    default = orig_param.default
+                default = orig_param.default
 
-                # Copy constraints
-                constraints = dict((key, getattr(orig_param, key))
-                                   for key in Model.parameter_constraints)
+            # Copy constraints
+            constraints = dict((key, getattr(orig_param, key))
+                               for key in Model.parameter_constraints)
 
-                # Note: Parameter.copy() returns a new unbound Parameter, never
-                # a bound Parameter even if submodel is a Model instance (as
-                # opposed to a Model subclass)
-                new_param = orig_param.copy(name=param_name, default=default,
-                                            **constraints)
+            # Note: Parameter.copy() returns a new unbound Parameter, never
+            # a bound Parameter even if submodel is a Model instance (as
+            # opposed to a Model subclass)
+            new_param = orig_param.copy(name=param_name, default=default,
+                                        **constraints)
 
             setattr(cls, param_name, new_param)
 
@@ -2023,6 +2218,10 @@ class _CompoundModelMeta(_ModelMeta):
         # albeit with more formatting options
         return cls._tree.format_expression(OPERATOR_PRECEDENCE)
 
+    def _format_components(cls):
+        return '\n\n'.join('[{0}]: {1!r}'.format(idx, m)
+                                 for idx, m in enumerate(cls._get_submodels()))
+
     def _normalize_index(cls, index):
         """
         Converts an index given to __getitem__ to either an integer, or
@@ -2066,9 +2265,9 @@ class _CompoundModelMeta(_ModelMeta):
             start = index.start if index.start is not None else 0
             stop = (index.stop
                     if index.stop is not None else len(cls.submodel_names))
-            if isinstance(start, int):
+            if isinstance(start, (int, np.integer)):
                 start = check_for_negative_index(start)
-            if isinstance(stop, int):
+            if isinstance(stop, (int, np.integer)):
                 stop = check_for_negative_index(stop)
             if isinstance(start, six.string_types):
                 start = get_index_from_name(start)
@@ -2082,7 +2281,7 @@ class _CompoundModelMeta(_ModelMeta):
                 raise ValueError("Empty slice of a compound model.")
 
             return slice(start, stop)
-        elif isinstance(index, int):
+        elif isinstance(index, (int, np.integer)):
             if index >= len(cls.submodel_names):
                 raise IndexError(
                         "Model index {0} out of range.".format(index))
@@ -2155,7 +2354,24 @@ class _CompoundModel(Model):
 
     _submodels = None
 
+    def __str__(self):
+        expression = self._format_expression()
+        components = self._format_components()
+        keywords = [
+            ('Expression', expression),
+            ('Components', '\n' + indent(components))
+        ]
+        return super(_CompoundModel, self)._format_str(keywords=keywords)
+
     def __getattr__(self, attr):
+        # This __getattr__ is necessary, because _CompoundModelMeta creates
+        # Parameter descriptors *lazily*--they do not exist in the class
+        # __dict__ until one of them has been accessed.
+        # However, this is at odds with how Python looks up descriptors (see
+        # (https://docs.python.org/3/reference/datamodel.html#invoking-descriptors)
+        # which is to look directly in the class __dict__
+        # This workaround allows descriptors to work correctly when they are
+        # not initially found in the class __dict__
         value = getattr(self.__class__, attr)
         if hasattr(value, '__get__'):
             # Object is a descriptor, so we should really return the result of

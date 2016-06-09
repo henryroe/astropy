@@ -9,12 +9,12 @@ from .utils import KernelSizeError
 from ..modeling import models
 from ..modeling.core import Fittable1DModel, Fittable2DModel
 
-__all__ = sorted(['Gaussian1DKernel', 'Gaussian2DKernel', 'CustomKernel',
-                  'Box1DKernel', 'Box2DKernel', 'Tophat2DKernel',
-                  'Trapezoid1DKernel', 'MexicanHat1DKernel',
-                  'MexicanHat2DKernel', 'AiryDisk2DKernel',
-                  'Moffat2DKernel', 'Model1DKernel', 'Model2DKernel',
-                  'TrapezoidDisk2DKernel', 'Ring2DKernel'])
+
+__all__ = ['Gaussian1DKernel', 'Gaussian2DKernel', 'CustomKernel',
+           'Box1DKernel', 'Box2DKernel', 'Tophat2DKernel',
+           'Trapezoid1DKernel', 'MexicanHat1DKernel', 'MexicanHat2DKernel',
+           'AiryDisk2DKernel', 'Moffat2DKernel', 'Model1DKernel',
+           'Model2DKernel', 'TrapezoidDisk2DKernel', 'Ring2DKernel']
 
 
 def _round_up_to_odd_integer(value):
@@ -540,7 +540,7 @@ class MexicanHat1DKernel(Kernel1D):
     This kernel is derived from a normalized Gaussian function, by
     computing the second derivative. This results in an amplitude
     at the kernels center of 1. / (sqrt(2 * pi) * width ** 3). The
-    normalization is the same as for `scipy.ndimage.filters.gaussian_laplace`,
+    normalization is the same as for `scipy.ndimage.gaussian_laplace`,
     except for a minus sign.
 
     Parameters
@@ -610,7 +610,7 @@ class MexicanHat2DKernel(Kernel2D):
     This kernel is derived from a normalized Gaussian function, by
     computing the second derivative. This results in an amplitude
     at the kernels center of 1. / (pi * width ** 4). The normalization
-    is the same as for `scipy.ndimage.filters.gaussian_laplace`, except
+    is the same as for `scipy.ndimage.gaussian_laplace`, except
     for a minus sign.
 
     Parameters
@@ -1011,6 +1011,6 @@ class CustomKernel(Kernel):
         # Check if array is bool
         ones = self._array == 1.
         zeros = self._array == 0
-        self._is_bool = np.all(np.logical_or(ones, zeros))
+        self._is_bool = bool(np.all(np.logical_or(ones, zeros)))
 
         self._truncation = 0.0

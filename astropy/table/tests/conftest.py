@@ -14,17 +14,19 @@ place to put fixtures that are shared between modules.  These fixtures
 can not be defined in a module by a different name and still be shared
 between modules.
 """
+
 from copy import deepcopy
+from collections import OrderedDict
+
 import numpy as np
 
 from ...tests.helper import pytest
 from ... import table
-from ...table import table_helpers
+from ...table import table_helpers, Table
 from ... import time
 from ... import units as u
 from ... import coordinates
 from .. import pprint
-from ...utils import OrderedDict
 
 
 @pytest.fixture(params=[table.Column, table.MaskedColumn])
@@ -159,3 +161,22 @@ def mixin_cols(request):
     cols['m'] = mixin_cols[request.param]
 
     return cols
+
+@pytest.fixture(params=[False, True])
+def T1(request):
+    T = Table.read([' a b c d',
+                 ' 2 c 7.0 0',
+                 ' 2 b 5.0 1',
+                 ' 2 b 6.0 2',
+                 ' 2 a 4.0 3',
+                 ' 0 a 0.0 4',
+                 ' 1 b 3.0 5',
+                 ' 1 a 2.0 6',
+                 ' 1 a 1.0 7',
+                 ], format='ascii')
+    T.meta.update({'ta': 1})
+    T['c'].meta.update({'a': 1})
+    T['c'].description = 'column c'
+    if request.param:
+        T.add_index('a')
+    return T

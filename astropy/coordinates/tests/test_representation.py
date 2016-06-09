@@ -4,6 +4,8 @@
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
+from copy import deepcopy
+
 import numpy as np
 from numpy.testing import assert_allclose
 
@@ -11,11 +13,21 @@ from ... import units as u
 from ...tests.helper import pytest
 from ..angles import Longitude, Latitude, Angle
 from ..distances import Distance
-from ..representation import (SphericalRepresentation,
+from ..representation import (REPRESENTATION_CLASSES,
+                              SphericalRepresentation,
                               UnitSphericalRepresentation,
                               CartesianRepresentation,
                               CylindricalRepresentation,
                               PhysicsSphericalRepresentation)
+
+
+def setup_function(func):
+    func.REPRESENTATION_CLASSES_ORIG = deepcopy(REPRESENTATION_CLASSES)
+
+
+def teardown_function(func):
+    REPRESENTATION_CLASSES.clear()
+    REPRESENTATION_CLASSES.update(func.REPRESENTATION_CLASSES_ORIG)
 
 
 def assert_allclose_quantity(q1, q2):
@@ -508,23 +520,15 @@ class TestCartesianRepresentation(object):
         assert_allclose(s1.z.value, 3)
 
     def test_init_one_array_size_fail(self):
-
         with pytest.raises(ValueError) as exc:
             s1 = CartesianRepresentation(x=[1, 2, 3, 4] * u.pc)
-
-        # exception text differs on Python 2 and Python 3
-        if hasattr(exc.value, 'args'):
-            assert exc.value.args[0].startswith("too many values to unpack")
-        else:
-            #py 2.6 doesn't have `args`
-            assert exc.value == 'too many values to unpack'
+        assert exc.value.args[0].startswith("too many values to unpack")
 
     def test_init_one_array_yz_fail(self):
-
         with pytest.raises(ValueError) as exc:
             s1 = CartesianRepresentation(x=[1, 2, 3, 4] * u.pc, y=[1, 2] * u.pc)
-
-        assert exc.value.args[0] == "x, y, and z are required to instantiate CartesianRepresentation"
+        assert exc.value.args[0] == ("x, y, and z are required to instantiate "
+                                     "CartesianRepresentation")
 
     def test_init_array_nocopy(self):
 
@@ -650,6 +654,23 @@ class TestCartesianRepresentation(object):
 
         with pytest.raises(TypeError):
             s_slc = s[0]
+
+
+    def test_transform(self):
+
+        s1 = CartesianRepresentation(x=[1,2] * u.kpc, y=[3,4] * u.kpc, z=[5,6] * u.kpc)
+
+        matrix = np.array([[1,2,3], [4,5,6], [7,8,9]])
+
+        s2 = s1.transform(matrix)
+
+        assert_allclose(s2.x.value, [1 * 1 + 2 * 3 + 3 * 5, 1 * 2 + 2 * 4 + 3 * 6])
+        assert_allclose(s2.y.value, [4 * 1 + 5 * 3 + 6 * 5, 4 * 2 + 5 * 4 + 6 * 6])
+        assert_allclose(s2.z.value, [7 * 1 + 8 * 3 + 9 * 5, 7 * 2 + 8 * 4 + 9 * 6])
+
+        assert s2.x.unit is u.kpc
+        assert s2.y.unit is u.kpc
+        assert s2.z.unit is u.kpc
 
 
 class TestCylindricalRepresentation(object):
@@ -891,6 +912,22 @@ def test_unit_spherical_roundtrip():
     assert_allclose_quantity(s1.lat, s4.lat)
 
 
+def test_no_unnecessary_copies():
+
+    s1 = UnitSphericalRepresentation(lon=[10., 30.] * u.deg,
+                                     lat=[5., 6.] * u.arcmin)
+    s2 = s1.represent_as(UnitSphericalRepresentation)
+    assert s2 is s1
+    assert np.may_share_memory(s1.lon, s2.lon)
+    assert np.may_share_memory(s1.lat, s2.lat)
+    s3 = s1.represent_as(SphericalRepresentation)
+    assert np.may_share_memory(s1.lon, s3.lon)
+    assert np.may_share_memory(s1.lat, s3.lat)
+    s4 = s1.represent_as(CartesianRepresentation)
+    s5 = s4.represent_as(CylindricalRepresentation)
+    assert np.may_share_memory(s5.z, s4.z)
+
+
 def test_representation_repr():
     r1 = SphericalRepresentation(lon=1 * u.deg, lat=2.5 * u.deg, distance=1 * u.kpc)
     assert repr(r1) == ('<SphericalRepresentation (lon, lat, distance) in (deg, deg, kpc)\n'
@@ -917,7 +954,7 @@ def test_representation_str():
 
 
 def test_subclass_representation():
-    from ...utils import OrderedDict
+    from collections import OrderedDict
     from ..builtin_frames import ICRS
 
     class Longitude180(Longitude):

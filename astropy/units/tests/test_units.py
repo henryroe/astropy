@@ -10,6 +10,7 @@ Regression tests for the units package
 from __future__ import (absolute_import, unicode_literals, division,
                         print_function)
 
+from fractions import Fraction
 
 import numpy as np
 from numpy.testing.utils import assert_allclose
@@ -17,7 +18,6 @@ from numpy.testing.utils import assert_allclose
 from ...extern import six
 from ...extern.six.moves import cPickle as pickle
 from ...tests.helper import pytest, raises, catch_warnings
-from ...utils.compat.fractions import Fraction
 
 from ... import units as u
 from ... import constants as c
@@ -101,6 +101,22 @@ def test_repr():
     assert repr(u.cm) == 'Unit("cm")'
 
 
+def test_represents():
+    assert u.m.represents is u.m
+    assert u.km.represents.scale == 1000.
+    assert u.km.represents.bases == [u.m]
+    assert u.Ry.scale == 1.0 and u.Ry.bases == [u.Ry]
+    assert_allclose(u.Ry.represents.scale, 13.605692518464949)
+    assert u.Ry.represents.bases == [u.eV]
+    bla = u.def_unit('bla', namespace=locals())
+    assert bla.represents is bla
+    blabla = u.def_unit('blabla', 10 * u.hr, namespace=locals())
+    assert blabla.represents.scale == 10.
+    assert blabla.represents.bases == [u.hr]
+    assert blabla.decompose().scale == 10 * 3600
+    assert blabla.decompose().bases == [u.s]
+
+
 def test_units_conversion():
     assert_allclose(u.kpc.to(u.Mpc), 0.001)
     assert_allclose(u.Mpc.to(u.kpc), 1000)
@@ -111,7 +127,7 @@ def test_units_conversion():
 
 def test_units_manipulation():
     # Just do some manipulation and check it's happy
-    (u.kpc * u.yr) ** (1, 3) / u.Myr
+    (u.kpc * u.yr) ** Fraction(1, 3) / u.Myr
     (u.AA * u.erg) ** 9
 
 
@@ -292,62 +308,78 @@ def test_empty_compose():
         composed = u.m.compose(units=[])
 
 
-def test_compose_roundtrip():
-    def _test_compose_roundtrip(unit):
-        composed_list = unit.decompose().compose()
-        found = False
-        for composed in composed_list:
-            if len(composed.bases):
-                if composed.bases[0] is unit:
-                    found = True
-                    break
-            elif len(unit.bases) == 0:
+def _unit_as_str(unit):
+    # This function serves two purposes - it is used to sort the units to
+    # test alphabetically, and it is also use to allow pytest to show the unit
+    # in the [] when running the parametrized tests.
+    return str(unit)
+
+
+# We use a set to make sure we don't have any duplicates.
+COMPOSE_ROUNDTRIP = set()
+for val in u.__dict__.values():
+    if (isinstance(val, u.UnitBase) and
+            not isinstance(val, u.PrefixUnit)):
+        COMPOSE_ROUNDTRIP.add(val)
+
+
+@pytest.mark.parametrize('unit', sorted(COMPOSE_ROUNDTRIP, key=_unit_as_str), ids=_unit_as_str)
+def test_compose_roundtrip(unit):
+    composed_list = unit.decompose().compose()
+    found = False
+    for composed in composed_list:
+        if len(composed.bases):
+            if composed.bases[0] is unit:
                 found = True
                 break
-        assert found
-
-    from ... import units as u
-
-    for val in u.__dict__.values():
-        if (isinstance(val, u.UnitBase) and
-                not isinstance(val, u.PrefixUnit)):
-            yield _test_compose_roundtrip, val
+        elif len(unit.bases) == 0:
+            found = True
+            break
+    assert found
 
 
-def test_compose_cgs_to_si():
-    def _test_compose_cgs_to_si(unit):
+# We use a set to make sure we don't have any duplicates.
+COMPOSE_CGS_TO_SI = set()
+for val in u.cgs.__dict__.values():
+    # Can't decompose Celsius
+    if (isinstance(val, u.UnitBase) and
+            not isinstance(val, u.PrefixUnit) and
+            val != u.cgs.deg_C):
+        COMPOSE_CGS_TO_SI.add(val)
+
+@pytest.mark.parametrize('unit', sorted(COMPOSE_CGS_TO_SI, key=_unit_as_str),
+                         ids=_unit_as_str)
+def test_compose_cgs_to_si(unit):
+    for iter in range(10):
         si = unit.to_system(u.si)
         assert [x.is_equivalent(unit) for x in si]
         assert si[0] == unit.si
 
+
+# We use a set to make sure we don't have any duplicates.
+COMPOSE_SI_TO_CGS = set()
+for val in u.si.__dict__.values():
     # Can't decompose Celsius
-    for val in u.cgs.__dict__.values():
-        if (isinstance(val, u.UnitBase) and
-                not isinstance(val, u.PrefixUnit) and
-                val != u.cgs.deg_C):
-            yield _test_compose_cgs_to_si, val
+    if (isinstance(val, u.UnitBase) and
+            not isinstance(val, u.PrefixUnit) and
+            val != u.si.deg_C):
+        COMPOSE_SI_TO_CGS.add(val)
 
+@pytest.mark.parametrize('unit', sorted(COMPOSE_SI_TO_CGS, key=_unit_as_str), ids=_unit_as_str)
+def test_compose_si_to_cgs(unit):
 
-def test_compose_si_to_cgs():
-    def _test_compose_si_to_cgs(unit):
-        # Can't convert things with Ampere to CGS without more context
-        try:
-            cgs = unit.to_system(u.cgs)
-        except u.UnitsError:
-            if u.A in unit.decompose().bases:
-                pass
-            else:
-                raise
+    # Can't convert things with Ampere to CGS without more context
+    try:
+        cgs = unit.to_system(u.cgs)
+    except u.UnitsError:
+        if u.A in unit.decompose().bases:
+            pass
         else:
-            assert [x.is_equivalent(unit) for x in cgs]
-            assert cgs[0] == unit.cgs
+            raise
+    else:
+        assert [x.is_equivalent(unit) for x in cgs]
+        assert cgs[0] == unit.cgs
 
-    # Can't decompose Celsius
-    for val in u.si.__dict__.values():
-        if (isinstance(val, u.UnitBase) and
-                not isinstance(val, u.PrefixUnit) and
-                val != u.si.deg_C):
-            yield _test_compose_si_to_cgs, val
 
 
 def test_to_cgs():
@@ -456,6 +488,13 @@ def test_no_as():
     assert not hasattr(u, 'as')
     assert hasattr(u, 'attosecond')
 
+
+def test_no_duplicates_in_names():
+    # Regression test for #5036
+    assert u.ct.names == ['ct', 'count']
+    assert u.ct.short_names == ['ct', 'count']
+    assert u.ct.long_names == ['count']
+    assert set(u.ph.names) == set(u.ph.short_names) | set(u.ph.long_names)
 
 def test_pickling():
     p = pickle.dumps(u.m)
@@ -623,7 +662,7 @@ def test_fractional_powers():
     assert x.powers[0].denominator == 7
 
     x = u.cm ** Fraction(1, 2) * u.cm ** Fraction(2, 3)
-    assert type(x.powers[0]) == Fraction
+    assert isinstance(x.powers[0], Fraction)
     assert x.powers[0] == Fraction(7, 6)
 
 
@@ -651,13 +690,13 @@ def test_compare_with_none():
     # Ensure that equality comparisons with `None` work, and don't
     # raise exceptions.  We are deliberately not using `is None` here
     # because that doesn't trigger the bug.  See #3108.
-    assert not (u.m == None)
-    assert u.m != None
+    assert not (u.m == None)  # nopep8
+    assert u.m != None  # nopep8
 
 
 def test_validate_power_detect_fraction():
     frac = utils.validate_power(1.1666666666666665)
-    assert type(frac) == Fraction
+    assert isinstance(frac, Fraction)
     assert frac.numerator == 7
     assert frac.denominator == 6
 
@@ -692,7 +731,6 @@ def test_fractional_rounding_errors_simple():
 
 def test_enable_unit_groupings():
     from ...units import cds
-    assert cds.geoMass not in u.kg.find_equivalent_units()
 
     with cds.enable():
         assert cds.geoMass in u.kg.find_equivalent_units()

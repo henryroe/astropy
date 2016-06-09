@@ -1,10 +1,7 @@
 # -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-from astropy.extern import six
-
 from ... import units as u
-from ...extern import six
 from ...tests.helper import pytest
 
 
@@ -192,4 +189,3 @@ def test_kwargs_extra():
     assert isinstance(solarx, u.Quantity)
 
     assert solarx.unit == u.deg
-

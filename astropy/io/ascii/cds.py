@@ -18,7 +18,7 @@ import os
 from . import core
 from . import fixedwidth
 
-from ...utils.compat import ignored
+from ...utils.compat import suppress
 
 
 __doctest_skip__ = ['*']
@@ -103,8 +103,8 @@ class CdsHeader(core.BaseHeader):
                                     (?P<end>   \d+)        \s+
                                     (?P<format> [\w.]+)     \s+
                                     (?P<units> \S+)        \s+
-                                    (?P<name>  \S+)        \s+
-                                    (?P<descr> \S.+)""",
+                                    (?P<name>  \S+)
+                                    (\s+ (?P<descr> \S.*))?""",
                                 re.VERBOSE)
 
         cols = []
@@ -120,13 +120,14 @@ class CdsHeader(core.BaseHeader):
                 col.unit = match.group('units')
                 if col.unit == '---':
                     col.unit = None  # "---" is the marker for no unit in CDS table
-                col.description = match.group('descr').strip()
+                col.description = (match.group('descr') or '').strip()
                 col.raw_type = match.group('format')
                 col.type = self.get_col_type(col)
 
                 match = re.match(
-                    r'\? (?P<equal> =)? (?P<nullval> \S*)', col.description, re.VERBOSE)
+                    r'\? (?P<equal> =)? (?P<nullval> \S*) (\s+ (?P<descriptiontext> \S.*))?', col.description, re.VERBOSE)
                 if match:
+                    col.description=(match.group('descriptiontext') or '').strip()
                     if issubclass(col.type, core.FloatType):
                         fillval = 'nan'
                     else:
@@ -298,7 +299,7 @@ class Cds(core.BaseReader):
         if self.data.start_line == 'guess':
             # Replicate the first part of BaseReader.read up to the point where
             # the table lines are initially read in.
-            with ignored(TypeError):
+            with suppress(TypeError):
                 # For strings only
                 if os.linesep not in table + '':
                     self.data.table_name = os.path.basename(table)
@@ -314,7 +315,7 @@ class Cds(core.BaseReader):
             # could be a file.
             for data_start in range(len(lines)):
                 self.data.start_line = data_start
-                with ignored(Exception):
+                with suppress(Exception):
                     table = super(Cds, self).read(lines)
                     return table
         else:

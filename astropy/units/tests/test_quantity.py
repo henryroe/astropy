@@ -9,6 +9,7 @@ from __future__ import (absolute_import, unicode_literals, division,
 
 import copy
 import decimal
+from fractions import Fraction
 
 import numpy as np
 from numpy.testing import (assert_allclose, assert_array_equal,
@@ -17,12 +18,22 @@ from numpy.testing import (assert_allclose, assert_array_equal,
 
 from ...tests.helper import raises, pytest
 from ...utils import isiterable, minversion
-from ...utils.compat import NUMPY_LT_1_7
 from ... import units as u
 from ...units.quantity import _UNIT_NOT_INITIALISED
 from ...extern.six.moves import xrange
 from ...extern.six.moves import cPickle as pickle
 from ...extern import six
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from distutils.version import LooseVersion
+    MATPLOTLIB_LT_14 = LooseVersion(matplotlib.__version__) < LooseVersion("1.4")
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+
 
 """ The Quantity class will represent a number + unit + uncertainty """
 
@@ -712,12 +723,6 @@ class TestQuantityDisplay(object):
         assert self.scalarfloatq._repr_latex_() == '$1.3 \\; \\mathrm{m}$'
         assert (q2scalar._repr_latex_() ==
                 '$1.5 \\times 10^{14} \\; \\mathrm{\\frac{m}{s}}$')
-
-        if NUMPY_LT_1_7:
-            with pytest.raises(NotImplementedError):
-                self.arrq._repr_latex_()
-            return  # all arrays should fail
-
         assert self.arrq._repr_latex_() == '$[1,~2.3,~8.9] \; \mathrm{m}$'
 
         qmed = np.arange(100)*u.m
@@ -1089,6 +1094,14 @@ def test_quantity_tuple_power():
     (5.0 * u.m) ** (1, 2)
 
 
+def test_quantity_fraction_power():
+    q = (25.0 * u.m**2) ** Fraction(1, 2)
+    assert q.value == 5.
+    assert q.unit == u.m
+    # Regression check to ensure we didn't create an object type by raising
+    # the value of the quantity to a Fraction. [#3922]
+    assert q.dtype.kind == 'f'
+
 def test_inherit_docstrings():
     assert u.Quantity.argmax.__doc__ == np.ndarray.argmax.__doc__
 
@@ -1171,11 +1184,28 @@ def test_repr_array_of_quantity():
     """
 
     a = np.array([1 * u.m, 2 * u.s], dtype=object)
-    if NUMPY_LT_1_7:
-        # Numpy 1.6.x has some different defaults for how to display object
-        # arrays (it uses the str() of the objects instead of the repr()
-        assert repr(a) == 'array([1.0 m, 2.0 s], dtype=object)'
-        assert str(a) == '[1.0 m 2.0 s]'
-    else:
-        assert repr(a) == 'array([<Quantity 1.0 m>, <Quantity 2.0 s>], dtype=object)'
-        assert str(a) == '[<Quantity 1.0 m> <Quantity 2.0 s>]'
+    assert repr(a) == 'array([<Quantity 1.0 m>, <Quantity 2.0 s>], dtype=object)'
+    assert str(a) == '[<Quantity 1.0 m> <Quantity 2.0 s>]'
+
+
+@pytest.mark.skipif('not HAS_MATPLOTLIB')
+@pytest.mark.xfail('MATPLOTLIB_LT_14')
+class TestQuantityMatplotlib(object):
+    """Test if passing matplotlib quantities works.
+
+    TODO: create PNG output and check against reference image
+          once `astropy.wcsaxes` is merged, which provides
+          the machinery for this.
+
+    See https://github.com/astropy/astropy/issues/1881
+    See https://github.com/astropy/astropy/pull/2139
+    """
+
+    def test_plot(self):
+        data = u.Quantity([4, 5, 6], 's')
+        plt.plot(data)
+
+    def test_scatter(self):
+        x = u.Quantity([4, 5, 6], 'second')
+        y = [1, 3, 4] * u.m
+        plt.scatter(x, y)

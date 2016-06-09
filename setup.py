@@ -9,7 +9,7 @@ import ah_bootstrap
 from setuptools import setup
 
 from astropy_helpers.setup_helpers import (
-    register_commands, adjust_compiler, get_package_info, get_debug_option)
+    register_commands, get_package_info, get_debug_option)
 try:
     from astropy_helpers.distutils_helpers import is_distutils_display_option
 except:
@@ -23,7 +23,7 @@ import astropy
 NAME = 'astropy'
 
 # VERSION should be PEP386 compatible (http://www.python.org/dev/peps/pep-0386)
-VERSION = '1.1.dev'
+VERSION = '1.2.dev'
 
 # Indicates if this version is a release version
 RELEASE = 'dev' not in VERSION
@@ -38,10 +38,6 @@ DOWNLOAD_BASE_URL = 'http://pypi.python.org/packages/source/a/astropy'
 # modify distutils' behavior.
 cmdclassd = register_commands(NAME, VERSION, RELEASE)
 
-# Adjust the compiler in case the default on this platform is to use a
-# broken one.
-adjust_compiler(NAME)
-
 # Freeze build information in version.py
 generate_version_py(NAME, VERSION, RELEASE, get_debug_option(NAME),
                     uses_git=not RELEASE)
@@ -54,16 +50,8 @@ package_info = get_package_info()
 # Add the project-global data
 package_info['package_data'].setdefault('astropy', []).append('data/*')
 
-# Currently the only entry points installed by Astropy are hooks to
-# zest.releaser for doing Astropy's releases
+# Add any necessary entry points
 entry_points = {}
-for hook in [('prereleaser', 'middle'), ('releaser', 'middle'),
-             ('postreleaser', 'before'), ('postreleaser', 'middle')]:
-    hook_ep = 'zest.releaser.' + '.'.join(hook)
-    hook_name = 'astropy.release.' + '.'.join(hook)
-    hook_func = 'astropy.utils.release:' + '_'.join(hook)
-    entry_points[hook_ep] = ['%s = %s' % (hook_name, hook_func)]
-
 # Command-line scripts
 entry_points['console_scripts'] = [
     'fits2bitmap = astropy.visualization.scripts.fits2bitmap:main',
@@ -97,6 +85,9 @@ setup(name=NAME,
       url='http://astropy.org',
       long_description=astropy.__doc__,
       download_url='%s/astropy-%s.tar.gz' % (DOWNLOAD_BASE_URL, VERSION),
+      keywords=['astronomy', 'astrophysics', 'cosmology', 'space', 'science',
+                'units', 'table', 'wcs', 'vo', 'samp', 'coordinate', 'fits',
+                'modeling', 'models', 'fitting', 'ascii'],
       classifiers=[
           'Intended Audience :: Science/Research',
           'License :: OSI Approved :: BSD License',

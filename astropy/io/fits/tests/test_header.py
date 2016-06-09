@@ -5,6 +5,7 @@
 from __future__ import division, with_statement
 
 import warnings
+import collections
 
 from io import StringIO, BytesIO
 
@@ -15,14 +16,30 @@ from ....extern.six import u, iterkeys, itervalues, iteritems
 from ....extern.six.moves import zip
 from ....io import fits
 from ....io.fits.verify import VerifyWarning
-from ....tests.helper import pytest, catch_warnings
+from ....tests.helper import pytest, catch_warnings, ignore_warnings
 from ....utils.exceptions import AstropyDeprecationWarning
 
 from . import FitsTestCase
-from .util import ignore_warnings
 from ..card import _pad
-from ..header import _pad_length, BLOCK_SIZE
+from ..header import _pad_length
 from ..util import encode_ascii
+
+
+def test_init_with_dict():
+    dict1 = {'a': 11, 'b': 12, 'c': 13, 'd': 14, 'e': 15}
+    h1 = fits.Header(dict1)
+    for i in dict1:
+        assert dict1[i] == h1[i]
+
+
+def test_init_with_ordereddict():
+    # Create a list of tuples. Each tuple consisting of a letter and the number
+    list1 = [(i, j) for i, j in zip('abcdefghijklmnopqrstuvwxyz', range(26))]
+    # Create an ordered dictionary and a header from this dictionary
+    dict1 = collections.OrderedDict(list1)
+    h1 = fits.Header(dict1)
+    # Check that the order is preserved of the initial list
+    assert all(h1[val] == list1[i][1] for i, val in enumerate(h1))
 
 
 class TestOldApiHeaderFunctions(FitsTestCase):
@@ -181,24 +198,24 @@ class TestOldApiHeaderFunctions(FitsTestCase):
         h = fits.Header()
         h.update('FOO', True)
         h.update('BAR', False)
-        assert h['FOO'] == True
-        assert h['BAR'] == False
+        assert h['FOO'] is True
+        assert h['BAR'] is False
         assert h.ascard['FOO'].cardimage == fooimg
         assert h.ascard['BAR'].cardimage == barimg
 
         h = fits.Header()
         h.update('FOO', np.bool_(True))
         h.update('BAR', np.bool_(False))
-        assert h['FOO'] == True
-        assert h['BAR'] == False
+        assert h['FOO'] is True
+        assert h['BAR'] is False
         assert h.ascard['FOO'].cardimage == fooimg
         assert h.ascard['BAR'].cardimage == barimg
 
         h = fits.Header()
         h.ascard.append(fits.Card.fromstring(fooimg))
         h.ascard.append(fits.Card.fromstring(barimg))
-        assert h['FOO'] == True
-        assert h['BAR'] == False
+        assert h['FOO'] is True
+        assert h['BAR'] is False
         assert h.ascard['FOO'].cardimage == fooimg
         assert h.ascard['BAR'].cardimage == barimg
 
@@ -253,7 +270,7 @@ class TestHeaderFunctions(FitsTestCase):
         assert str(c) == _pad("ABC     =                    T")
 
         c = fits.Card.fromstring('ABC     = F')
-        assert c.value == False
+        assert c.value is False
 
     def test_long_integer_value_card(self):
         """Test Card constructor with long integer value"""
@@ -1385,8 +1402,32 @@ class TestHeaderFunctions(FitsTestCase):
         assert list(header.keys())[-3] == 'TEST1'
 
     def test_remove(self):
-        # TODO: Test the Header.remove() method; add support for ignore_missing
-        pass
+        header = fits.Header([('A', 'B'), ('C', 'D')])
+
+        # When keyword is present in the header it should be removed.
+        header.remove('C')
+        assert len(header) == 1
+        assert list(header) == ['A']
+        assert 'C' not in header
+
+        # When keyword is not present in the header and ignore_missing is
+        # False, KeyError should be raised
+        with pytest.raises(KeyError):
+            header.remove('F')
+
+        # When keyword is not present and ignore_missing is True, KeyError
+        # will be ignored
+        header.remove('F', ignore_missing=True)
+        assert len(header) == 1
+
+        # Test for removing all instances of a keyword
+        header = fits.Header([('A', 'B'), ('C', 'D'), ('A', 'F')])
+        header.remove('A', remove_all=True)
+        assert 'A' not in header
+        assert len(header) == 1
+        assert list(header) == ['C']
+        assert header[0] == 'D'
+
 
     def test_header_comments(self):
         header = fits.Header([('A', 'B', 'C'), ('DEF', 'G', 'H')])
@@ -1799,24 +1840,24 @@ class TestHeaderFunctions(FitsTestCase):
         h = fits.Header()
         h['FOO'] = True
         h['BAR'] = False
-        assert h['FOO'] == True
-        assert h['BAR'] == False
+        assert h['FOO'] is True
+        assert h['BAR'] is False
         assert str(h.cards['FOO']) == fooimg
         assert str(h.cards['BAR']) == barimg
 
         h = fits.Header()
         h['FOO'] = np.bool_(True)
         h['BAR'] = np.bool_(False)
-        assert h['FOO'] == True
-        assert h['BAR'] == False
+        assert h['FOO'] is True
+        assert h['BAR'] is False
         assert str(h.cards['FOO']) == fooimg
         assert str(h.cards['BAR']) == barimg
 
         h = fits.Header()
         h.append(fits.Card.fromstring(fooimg))
         h.append(fits.Card.fromstring(barimg))
-        assert h['FOO'] == True
-        assert h['BAR'] == False
+        assert h['FOO'] is True
+        assert h['BAR'] is False
         assert str(h.cards['FOO']) == fooimg
         assert str(h.cards['BAR']) == barimg
 

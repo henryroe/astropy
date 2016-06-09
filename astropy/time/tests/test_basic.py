@@ -5,17 +5,24 @@
 import copy
 import functools
 import sys
-
-from datetime import datetime, tzinfo, timedelta
+import datetime
+from copy import deepcopy
 
 import numpy as np
 
 from ...tests.helper import pytest, catch_warnings
+from ...tests.disable_internet import INTERNET_OFF
 from ...extern import six
 from ...utils import isiterable
-from .. import Time, ScaleValueError, erfa_time, TIME_SCALES, TimeString
+from .. import Time, ScaleValueError, TIME_SCALES, TimeString, TimezoneInfo
 from ...coordinates import EarthLocation
-
+from ... import units as u
+from ... import _erfa as erfa
+try:
+    import pytz
+    HAS_PYTZ = True
+except ImportError:
+    HAS_PYTZ = False
 
 allclose_jd = functools.partial(np.allclose, rtol=2. ** -52, atol=0)
 allclose_jd2 = functools.partial(np.allclose, rtol=2. ** -52,
@@ -24,6 +31,14 @@ allclose_sec = functools.partial(np.allclose, rtol=2. ** -52,
                                  atol=2. ** -52 * 24 * 3600)  # 20 ps atol
 allclose_year = functools.partial(np.allclose, rtol=2. ** -52,
                                   atol=0.)  # 14 microsec at current epoch
+
+def setup_function(func):
+    func.FORMATS_ORIG = deepcopy(Time.FORMATS)
+
+
+def teardown_function(func):
+    Time.FORMATS.clear()
+    Time.FORMATS.update(func.FORMATS_ORIG)
 
 
 class TestBasic():
@@ -163,7 +178,7 @@ class TestBasic():
         assert t7_tdb[0, 0].delta_tdb_tt == t7_tdb.delta_tdb_tt[0, 0]
         assert np.all(t7_tdb[5].delta_tdb_tt == t7_tdb.delta_tdb_tt[5])
         assert np.all(t7_tdb[:, 2].delta_tdb_tt == t7_tdb.delta_tdb_tt[:, 2])
-        # Explicitly set delta_tdb_tt attrbite. Now it should not be sliced.
+        # Explicitly set delta_tdb_tt attribute. Now it should not be sliced.
         t7.delta_tdb_tt = 0.1
         t7_tdb2 = t7.tdb
         assert t7_tdb2[0, 0].delta_tdb_tt == 0.1
@@ -199,7 +214,7 @@ class TestBasic():
         assert allclose_sec(t.unix, 1262304000.0)
         assert allclose_sec(t.cxcsec, 378691266.184)
         assert allclose_sec(t.gps, 946339215.0)
-        assert t.datetime == datetime(2010, 1, 1)
+        assert t.datetime == datetime.datetime(2010, 1, 1)
 
     def test_precision(self):
         """Set the output precision which is used for some formats.  This is
@@ -210,22 +225,10 @@ class TestBasic():
         # Uses initial class-defined precision=3
         assert t.iso == '2010-01-01 00:00:00.000'
 
-        # Set global precision = 5  XXX this uses private var, FIX THIS
-        Time._precision = 5
-        assert t.iso == '2010-01-01 00:00:00.00000'
-
         # Set instance precision to 9
         t.precision = 9
         assert t.iso == '2010-01-01 00:00:00.000000000'
         assert t.tai.utc.iso == '2010-01-01 00:00:00.000000000'
-
-        # Restore global to original default of 3, instance is still at 9
-        Time._precision = 3
-        assert t.iso == '2010-01-01 00:00:00.000000000'
-
-        # Make a new time instance and confirm precision = 3
-        t = Time('2010-01-01 00:00:00', format='iso', scale='utc')
-        assert t.iso == '2010-01-01 00:00:00.000'
 
     def test_transforms(self):
         """Transform from UTC to all supported time scales (TAI, TCB, TCG,
@@ -266,7 +269,7 @@ class TestBasic():
 
     def test_location_array(self):
         """Check that location arrays are checked for size and used
-        for the corresponding times.  Also checks that erfa_time.d_tdb_tt
+        for the corresponding times.  Also checks that erfa
         can handle array-valued locations, and can broadcast these if needed.
         """
 
@@ -342,7 +345,7 @@ class TestBasic():
         Time(0.0, 51544.0333981, format='mjd', scale='tai')
         Time('2000:001:12:23:34.0', format='yday', scale='tai')
         Time('2000:001:12:23:34.0Z', format='yday', scale='utc')
-        dt = datetime(2000, 1, 2, 3, 4, 5, 123456)
+        dt = datetime.datetime(2000, 1, 2, 3, 4, 5, 123456)
         Time(dt, format='datetime', scale='tai')
         Time([dt, dt], format='datetime', scale='tai')
 
@@ -351,8 +354,8 @@ class TestBasic():
         Test datetime format, including guessing the format from the input type
         by not providing the format keyword to Time.
         """
-        dt = datetime(2000, 1, 2, 3, 4, 5, 123456)
-        dt2 = datetime(2001, 1, 1)
+        dt = datetime.datetime(2000, 1, 2, 3, 4, 5, 123456)
+        dt2 = datetime.datetime(2001, 1, 1)
         t = Time(dt, scale='utc', precision=9)
         assert t.iso == '2000-01-02 03:04:05.123456000'
         assert t.datetime == dt
@@ -364,7 +367,7 @@ class TestBasic():
         assert np.all(t.value == [dt, dt2])
 
         t = Time('2000-01-01 01:01:01.123456789', scale='tai')
-        assert t.datetime == datetime(2000, 1, 1, 1, 1, 1, 123457)
+        assert t.datetime == datetime.datetime(2000, 1, 1, 1, 1, 1, 123457)
 
         # broadcasting
         dt3 = (dt + (dt2-dt)*np.arange(12)).reshape(4, 3)
@@ -654,11 +657,16 @@ class TestSubFormat():
         assert t2.value == '1998-01-01 00:00:00.000'
 
         # Value take from Chandra.Time.DateTime('2010:001:00:00:00').secs
-        t = Time(378691266.184, format='cxcsec', scale='utc')
+        t_cxcsec = 378691266.184
+        t = Time(t_cxcsec, format='cxcsec', scale='utc')
+        assert allclose_sec(t.value, t_cxcsec)
+        assert allclose_sec(t.cxcsec, t_cxcsec)
+        assert allclose_sec(t.tt.value, t_cxcsec)
+        assert allclose_sec(t.tt.cxcsec, t_cxcsec)
         assert t.yday == '2010:001:00:00:00.000'
         t = Time('2010:001:00:00:00.000', scale='utc')
-        assert allclose_sec(t.cxcsec, 378691266.184)
-        assert allclose_sec(t.tt.cxcsec, 378691266.184)
+        assert allclose_sec(t.cxcsec, t_cxcsec)
+        assert allclose_sec(t.tt.cxcsec, t_cxcsec)
 
         # Value from:
         #   d = datetime.datetime(2000, 1, 1)
@@ -690,16 +698,16 @@ class TestSofaErrors():
         im = np.array([2000], dtype=np.intc)  # bad month
         id = np.array([2000], dtype=np.intc)  # bad day
         with pytest.raises(ValueError):  # bad month, fatal error
-            djm0, djm = erfa_time.cal2jd(iy, im, id)
+            djm0, djm = erfa.cal2jd(iy, im, id)
 
         iy[0] = -5000
         im[0] = 2
         with pytest.raises(ValueError):  # bad year, fatal error
-            djm0, djm = erfa_time.cal2jd(iy, im, id)
+            djm0, djm = erfa.cal2jd(iy, im, id)
 
         iy[0] = 2000
         with catch_warnings() as w:
-            djm0, djm = erfa_time.cal2jd(iy, im, id)
+            djm0, djm = erfa.cal2jd(iy, im, id)
         assert len(w) == 1
         assert 'bad day    (JD computed)' in six.text_type(w[0].message)
 
@@ -738,6 +746,12 @@ class TestCopyReplicate():
         # This is not allowed publicly, but here we hack the internal time
         # and location values to show that t and t2 are sharing references.
         t2._time.jd1 += 100.0
+
+        # Need to delete the cached yday attributes (only an issue because
+        # of the internal _time hack).
+        del t.cache
+        del t2.cache
+
         assert t.yday == t2.yday
         assert t.yday != t_yday  # prove that it changed
         t2_loc_x_view = t2.location.x
@@ -757,6 +771,12 @@ class TestCopyReplicate():
         # This is not allowed publicly, but here we hack the internal time
         # and location values to show that t and t2 are not sharing references.
         t2._time.jd1 += 100.0
+
+        # Need to delete the cached yday attributes (only an issue because
+        # of the internal _time hack).
+        del t.cache
+        del t2.cache
+
         assert t.yday != t2.yday
         assert t.yday == t_yday  # prove that it did not change
         t2_loc_x_view = t2.location.x
@@ -780,7 +800,7 @@ def test_now():
     Tests creating a Time object with the `now` class method.
     """
 
-    now = datetime.utcnow()
+    now = datetime.datetime.utcnow()
     t = Time.now()
 
     assert t.format == 'datetime'
@@ -876,8 +896,16 @@ def test_TimeFormat_scale():
     assert t.unix == t.utc.unix
 
 def test_scale_conversion():
-    with pytest.raises(ScaleValueError):
-        t = Time(Time.now().cxcsec, format='cxcsec', scale='ut1')
+    if INTERNET_OFF:
+        # With internet off (which is the default for testing) then this will
+        # fall back to the bundled IERS-B table and raise an exception.  But when
+        # testing with --remote-data the IERS_Auto class will get the latest IERS-A
+        # and this works.
+        with pytest.raises(ScaleValueError):
+            Time(Time.now().cxcsec, format='cxcsec', scale='ut1')
+    else:
+        Time(Time.now().cxcsec, format='cxcsec', scale='ut1')
+
 
 
 def test_byteorder():
@@ -896,13 +924,13 @@ def test_datetime_tzinfo():
     """
     Test #3160 that time zone info in datetime objects is respected.
     """
-    class TZm6(tzinfo):
+    class TZm6(datetime.tzinfo):
         def utcoffset(self, dt):
-            return timedelta(hours=-6)
+            return datetime.timedelta(hours=-6)
 
-    d = datetime(2002, 1, 2, 10, 3, 4, tzinfo=TZm6())
+    d = datetime.datetime(2002, 1, 2, 10, 3, 4, tzinfo=TZm6())
     t = Time(d)
-    assert t.value == datetime(2002, 1, 2, 16, 3, 4)
+    assert t.value == datetime.datetime(2002, 1, 2, 16, 3, 4)
 
 def test_subfmts_regex():
     """
@@ -923,8 +951,8 @@ def test_set_format_basic():
     """
     for format, value in (('jd', 2451577.5),
                           ('mjd', 51577.0),
-                          ('cxcsec', 65923200.0),
-                          ('datetime', datetime(2000, 2, 3, 0, 0)),
+                          ('cxcsec', 65923264.184),  # confirmed with Chandra.Time
+                          ('datetime', datetime.datetime(2000, 2, 3, 0, 0)),
                           ('iso', '2000-02-03 00:00:00.000')):
         t = Time('+02000-02-03', format='fits')
         t0 = t.replicate()
@@ -999,3 +1027,68 @@ def test_isiterable():
     t2 = Time(['1999-01-01 00:00:00.123456789', '2010-01-01 00:00:00'],
               format='iso', scale='utc')
     assert isiterable(t2)
+
+def test_to_datetime():
+    tz = TimezoneInfo(utc_offset=-10*u.hour, tzname='US/Hawaii')
+    # The above lines produces a `datetime.tzinfo` object similar to:
+    #     tzinfo = pytz.timezone('US/Hawaii')
+    time = Time('2010-09-03 00:00:00')
+    tz_aware_datetime = time.to_datetime(tz)
+    assert tz_aware_datetime.time() == datetime.time(14, 0)
+    forced_to_astropy_time = Time(tz_aware_datetime)
+    assert tz.tzname(time.datetime) == tz_aware_datetime.tzname()
+    assert time == forced_to_astropy_time
+
+    # Test non-scalar time inputs:
+    time = Time(['2010-09-03 00:00:00', '2005-09-03 06:00:00',
+                 '1990-09-03 06:00:00'])
+    tz_aware_datetime = time.to_datetime(tz)
+    forced_to_astropy_time = Time(tz_aware_datetime)
+    for dt, tz_dt in zip(time.datetime, tz_aware_datetime):
+        assert tz.tzname(dt) == tz_dt.tzname()
+    assert np.all(time == forced_to_astropy_time)
+
+@pytest.mark.skipif('not HAS_PYTZ')
+def test_to_datetime_pytz():
+
+    tz = pytz.timezone('US/Hawaii')
+    time = Time('2010-09-03 00:00:00')
+    tz_aware_datetime = time.to_datetime(tz)
+    forced_to_astropy_time = Time(tz_aware_datetime)
+    assert tz_aware_datetime.time() == datetime.time(14, 0)
+    assert tz.tzname(time.datetime) == tz_aware_datetime.tzname()
+    assert time == forced_to_astropy_time
+
+    # Test non-scalar time inputs:
+    time = Time(['2010-09-03 00:00:00', '2005-09-03 06:00:00',
+                 '1990-09-03 06:00:00'])
+    tz_aware_datetime = time.to_datetime(tz)
+    forced_to_astropy_time = Time(tz_aware_datetime)
+    for dt, tz_dt in zip(time.datetime, tz_aware_datetime):
+        assert tz.tzname(dt) == tz_dt.tzname()
+    assert np.all(time == forced_to_astropy_time)
+
+def test_cache():
+    t = Time('2010-09-03 00:00:00')
+    t2 = Time('2010-09-03 00:00:00')
+
+    # Time starts out without a cache
+    assert 'cache' not in t.__dict__
+
+    # Access the iso format and confirm that the cached version is as expected
+    t.iso
+    assert t.cache['format']['iso'] == t2.iso
+
+    # Access the TAI scale and confirm that the cached version is as expected
+    t.tai
+    assert t.cache['scale']['tai'] == t2.tai
+
+    # New Time object after scale transform does not have a cache yet
+    assert 'cache' not in t.tt.__dict__
+
+    # Clear the cache
+    del t.cache
+    assert 'cache' not in t.__dict__
+    # Check accessing the cache creates an empty dictionary
+    assert not t.cache
+    assert 'cache' in t.__dict__

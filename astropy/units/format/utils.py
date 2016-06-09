@@ -8,9 +8,9 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
 import warnings
+from fractions import Fraction
 
 from ...extern import six
-from ...utils.compat.fractions import Fraction
 from ...utils.misc import did_you_mean
 
 
@@ -90,7 +90,7 @@ def decompose_to_known_units(unit, func):
     func : callable
         This function will be called to determine if a given unit is
         "known".  If the unit is not known, this function should raise a
-        `~.exceptions.ValueError`.
+        `ValueError`.
 
     Returns
     -------

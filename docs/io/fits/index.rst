@@ -95,13 +95,13 @@ because by that point you're likely to run out of physical memory anyways), but
 64-bit systems are much less limited in this respect.
 
 .. warning::
-	When opening a file with ``memmap=True``, because of how mmap works this means that 
+	When opening a file with ``memmap=True``, because of how mmap works this means that
 	when the HDU data is accessed (i.e. ``hdul[0].data``) another handle to the FITS file
 	is opened by mmap. This means that even after calling ``hdul.close()`` the mmap still
 	holds an open handle to the data so that it can still be accessed by unwary programs
 	that were built with the assumption that the .data attribute has all the data in-memory.
 
-	In order to force the mmap to close either wait for the containing ``HDUList`` object to go 
+	In order to force the mmap to close either wait for the containing ``HDUList`` object to go
 	out of scope, or manually call ``del hdul[0].data`` (this works so long as there are no other
 	references held to the data array).
 
@@ -133,16 +133,16 @@ Working with compressed files
 
 The :func:`open` function will seamlessly open FITS files that have been
 compressed with gzip, bzip2 or pkzip. Note that in this context we're talking
-about a fits file that has been compressed with one of these utilities - e.g. a 
+about a fits file that has been compressed with one of these utilities - e.g. a
 .fits.gz file. Files that use compressed HDUs within the FITS file are discussed
 in :ref:`Compressed Image Data <astropy-io-fits-compressedImageData>`.
 
-There are some limitations with working with compressed files. For example with Zip 
+There are some limitations with working with compressed files. For example with Zip
 files that contain multiple compressed files, only the first file will be accessible.
 Also bzip does not support the append or update access modes.
 
 When writing a file (e.g. with the :func:`writeto` function), compression will be
-determined based on the filename extension given, or the compression used in a 
+determined based on the filename extension given, or the compression used in a
 pre-existing file that is being written to.
 
 Working with FITS Headers
@@ -169,7 +169,7 @@ to get the value of the keyword targname, which is a string 'NGC121'.
 Although keyword names are always in upper case inside the FITS file,
 specifying a keyword name with Astropy is case-insensitive, for the user's
 convenience. If the specified keyword name does not exist, it will raise a
-`~.exceptions.KeyError` exception.
+`KeyError` exception.
 
 We can also get the keyword value by indexing (a la Python lists)::
 
@@ -238,21 +238,21 @@ To update existing COMMENT or HISTORY cards, reference them by index::
 
 
 To see the entire header as it appears in the FITS file (with the END card and
-padding stripped), simply enter the header object by itself, or ``print
-repr(header)``::
+padding stripped), simply enter the header object by itself, or
+``print(repr(header))``::
 
     >>> header
     SIMPLE  =                    T / file does conform to FITS standard
     BITPIX  =                   16 / number of bits per data pixel
     NAXIS   =                    0 / number of data axes
     all cards are shown...
-    >>> print repr(header)
-    identical...
+    >>> print(repr(header))
+    ... identical ...
 
-Entering simply ``print header`` will also work, but may not be very legible on
-most displays, as this displays the header as it is written in the FITS file
+Entering simply ``print(header)`` will also work, but may not be very legible
+on most displays, as this displays the header as it is written in the FITS file
 itself, which means there are no linebreaks between cards.  This is a common
-confusion in new users.
+source of confusion for new users.
 
 It's also possible to view a slice of the header::
 
@@ -268,6 +268,9 @@ would with a dict::
     >>> prihdr.keys()
     ['SIMPLE', 'BITPIX', 'NAXIS', ...]
 
+.. topic:: Examples:
+
+    See also :ref:`sphx_glr_generated_examples_io_modify-fits-header.py`.
 
 Working with Image Data
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -307,7 +310,7 @@ information about the array, e.g.
 Since image data is a numpy object, we can slice it, view it, and perform
 mathematical operations on it. To see the pixel value at x=5, y=2::
 
-    >>> print scidata[1, 4]
+    >>> print(scidata[1, 4])
 
 Note that, like C (and unlike FORTRAN), Python is 0-indexed and the indices
 have the slowest axis first and fastest changing axis last; i.e. for a 2-D
@@ -343,6 +346,9 @@ a new file, you can use the :meth:`HDUList.writeto` method (see below).
 
 .. _Numpy documentation: http://docs.scipy.org/doc/numpy/reference/arrays.indexing.html
 
+.. topic:: Examples:
+
+    See also :ref:`sphx_glr_generated_examples_io_plot_fits-image.py`.
 
 Working With Table Data
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -365,7 +371,7 @@ guide.
 
 To see the first row of the table::
 
-    >>> print tbdata[0]
+    >>> print(tbdata[0])
     (1, 'abc', 3.7000002861022949, 0)
 
 Each row in the table is a :class:`FITS_record` object which looks like a
@@ -455,6 +461,9 @@ take the mean of a column::
 
 and so on.
 
+.. topic:: Examples:
+
+    See also :ref:`sphx_glr_generated_examples_io_fits-tables.py`.
 
 Save File Changes
 ^^^^^^^^^^^^^^^^^
@@ -605,6 +614,9 @@ So far, we have covered the most basic features of `astropy.io.fits`. In the
 following chapters we'll show more advanced examples and explain options in
 each class and method.
 
+.. topic:: Examples:
+
+    See also :ref:`sphx_glr_generated_examples_io_create-mef.py`.
 
 Convenience Functions
 ---------------------
@@ -740,7 +752,6 @@ Using `astropy.io.fits`
    usage/unfamiliar
    usage/scripts
    usage/misc
-   usage/examples
 
 Other Information
 =================

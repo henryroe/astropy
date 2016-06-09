@@ -22,16 +22,10 @@ from . import exceptions
 from . import tree
 from ...utils.xml import iterparser
 from ...utils import data
-from ...config import ConfigAlias
 
 
 __all__ = ['parse', 'parse_single_table', 'from_table', 'writeto', 'validate',
            'reset_vo_warnings']
-
-
-PEDANTIC = ConfigAlias(
-    '0.4', 'PEDANTIC', 'pedantic',
-    'astropy.io.votable.table', 'astropy.io.votable')
 
 
 def parse(source, columns=None, invalid='exception', pedantic=None,
@@ -202,7 +196,8 @@ def validate(source, output=None, xmllint=False, filename=None):
     Parameters
     ----------
     source : str or readable file-like object
-        Path to a VOTABLE_ xml file.
+        Path to a VOTABLE_ xml file or pathlib.path
+        object having Path to a VOTABLE_ xml file.
 
     output : writable file-like object, optional
         Where to output the report.  Defaults to ``sys.stdout``.

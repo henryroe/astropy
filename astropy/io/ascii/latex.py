@@ -110,7 +110,7 @@ class LatexHeader(core.BaseHeader):
 
     def start_line(self, lines):
         line = find_latex_line(lines, self.header_start)
-        if line:
+        if line is not None:
             return line + 1
         else:
             return None
@@ -127,7 +127,7 @@ class LatexHeader(core.BaseHeader):
         return units
 
     def write(self, lines):
-        if not 'col_align' in self.latex:
+        if 'col_align' not in self.latex:
             self.latex['col_align'] = len(self.cols) * 'c'
         if 'tablealign' in self.latex:
             align = '[' + self.latex['tablealign'] + ']'
@@ -352,7 +352,7 @@ class AASTexHeader(LatexHeader):
         return find_latex_line(lines, r'\tablehead')
 
     def write(self, lines):
-        if not 'col_align' in self.latex:
+        if 'col_align' not in self.latex:
             self.latex['col_align'] = len(self.cols) * 'c'
         if 'tablealign' in self.latex:
             align = '[' + self.latex['tablealign'] + ']'
@@ -384,7 +384,14 @@ class AASTexData(LatexData):
 
     def write(self, lines):
         lines.append(self.data_start)
+        lines_length_initial = len(lines)
         core.BaseData.write(self, lines)
+        # To remove extra space(s) and // appended which creates an extra new line
+        # in the end.
+        if len(lines) > lines_length_initial:
+            # we compile separately because py2.6 doesn't have a flags keyword in re.sub
+            re_final_line = re.compile(r'\s* \\ \\ \s* $', flags=re.VERBOSE)
+            lines[-1] = re.sub(re_final_line, '', lines[-1])
         lines.append(self.data_end)
         add_dictval_to_list(self.latex, 'tablefoot', lines)
         lines.append(r'\end{' + self.latex['tabletype'] + r'}')

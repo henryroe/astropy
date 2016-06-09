@@ -91,11 +91,12 @@
 /* Include the Python C API */
 
 #include <math.h>
+#include <string.h>
 
 #include <Python.h>
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/arrayobject.h>
 #include <fitsio2.h>
-#include <string.h>
 #include "compressionmodule.h"
 
 /* Some defines for Python3 support--bytes objects should be used where */
@@ -270,7 +271,7 @@ int get_header_string(PyObject* header, char* keyword, char* val, char* def) {
     }
     else {
         PyErr_Clear();
-        *val = def;
+        strncpy(val, def, 72);
         retval = 1;
     }
 
@@ -898,7 +899,7 @@ PyObject* compression_compress_hdu(PyObject* self, PyObject* args)
     unsigned long long heapsize;
 
     fitsfile* fileptr;
-    FITSfile* Fptr;
+    FITSfile* Fptr = NULL;
     int status = 0;
 
     if (!PyArg_ParseTuple(args, "O:compression.compress_hdu", &hdu))
@@ -931,8 +932,8 @@ PyObject* compression_compress_hdu(PyObject* self, PyObject* args)
 
     indata = (PyArrayObject*) PyObject_GetAttrString(hdu, "data");
 
-    fits_write_img(fileptr, datatype, 1, PyArray_SIZE(indata), indata->data,
-                   &status);
+    fits_write_img(fileptr, datatype, 1, PyArray_SIZE(indata),
+                   PyArray_DATA(indata), &status);
     if (status != 0) {
         process_status_err(status);
         goto fail;
@@ -977,7 +978,9 @@ fail:
 cleanup:
     if (columns != NULL) {
         PyMem_Free(columns);
-        Fptr->tableptr = NULL;
+	if (Fptr != NULL) {
+	    Fptr->tableptr = NULL;
+	}
     }
 
     if (fileptr != NULL) {
@@ -1057,8 +1060,8 @@ PyObject* compression_decompress_hdu(PyObject* self, PyObject* args)
     /* Create and allocate a new array for the decompressed data */
     outdata = (PyArrayObject*) PyArray_SimpleNew(zndim, znaxis, npdatatype);
 
-    fits_read_img(fileptr, datatype, 1, arrsize, NULL, outdata->data, &anynul,
-                  &status);
+    fits_read_img(fileptr, datatype, 1, arrsize, NULL, PyArray_DATA(outdata),
+                  &anynul, &status);
     if (status != 0) {
         process_status_err(status);
         outdata = NULL;

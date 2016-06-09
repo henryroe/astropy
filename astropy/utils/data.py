@@ -28,6 +28,12 @@ from .. import config as _config
 from ..utils.exceptions import AstropyWarning
 from ..utils.introspection import find_current_module, resolve_name
 
+try:
+    import pathlib
+except ImportError:
+    HAS_PATHLIB = False
+else:
+    HAS_PATHLIB = True
 
 __all__ = [
     'Conf', 'conf', 'get_readable_fileobj', 'get_file_contents',
@@ -68,20 +74,6 @@ class Conf(_config.ConfigNamespace):
 conf = Conf()
 
 
-DATAURL = _config.ConfigAlias(
-    '0.4', 'DATAURL', 'dataurl')
-REMOTE_TIMEOUT = _config.ConfigAlias(
-    '0.4', 'REMOTE_TIMEOUT', 'remote_timeout')
-COMPUTE_HASH_BLOCK_SIZE = _config.ConfigAlias(
-    '0.4', 'COMPUTE_HASH_BLOCK_SIZE', 'compute_hash_block_size')
-DOWNLOAD_CACHE_BLOCK_SIZE = _config.ConfigAlias(
-    '0.4', 'DOWNLOAD_CACHE_BLOCK_SIZE', 'download_block_size')
-DOWNLOAD_CACHE_LOCK_ATTEMPTS = _config.ConfigAlias(
-    '0.4', 'DOWNLOAD_CACHE_LOCK_ATTEMPTS', 'download_cache_lock_attempts')
-DELETE_TEMPORARY_DOWNLOADS_AT_EXIT = _config.ConfigAlias(
-    '0.4', 'DELETE_TEMPORARY_DOWNLOADS_AT_EXIT', 'delete_temporary_downloads_at_exit')
-
-
 class CacheMissingWarning(AstropyWarning):
     """
     This warning indicates the standard cache directory is not accessible, with
@@ -101,11 +93,10 @@ def _is_url(string):
         The string to test
     """
     url = urllib.parse.urlparse(string)
-    # url[0]==url.scheme, but url[0] is py 2.6-compat
-    # we can't just check that url[0] is not an empty string, because
+    # we can't just check that url.scheme is not an empty string, because
     # file paths in windows would return a non-empty scheme (e.g. e:\\
     # returns 'e').
-    return url[0].lower() in ['http', 'https', 'ftp', 'sftp', 'ssh', 'file']
+    return url.scheme.lower() in ['http', 'https', 'ftp', 'sftp', 'ssh', 'file']
 
 
 def _is_inside(path, parent_path):
@@ -121,7 +112,7 @@ def _is_inside(path, parent_path):
 def get_readable_fileobj(name_or_obj, encoding=None, cache=False,
                          show_progress=True, remote_timeout=None):
     """
-    Given a filename or a readable file-like object, return a context
+    Given a filename, pathlib.Path object or a readable file-like object, return a context
     manager that yields a readable file-like object.
 
     This supports passing filenames, URLs, and readable file-like objects,
@@ -148,7 +139,7 @@ def get_readable_fileobj(name_or_obj, encoding=None, cache=False,
     encoding : str, optional
         When `None` (default), returns a file-like object with a
         ``read`` method that on Python 2.x returns `bytes` objects and
-        on Python 3.x returns `str` (`unicode`) objects, using
+        on Python 3.x returns `str` (``unicode``) objects, using
         `locale.getpreferredencoding` as an encoding.  This matches
         the default behavior of the built-in `open` when no ``mode``
         argument is provided.
@@ -157,7 +148,7 @@ def get_readable_fileobj(name_or_obj, encoding=None, cache=False,
         method returns `bytes` objects.
 
         When another string, it is the name of an encoding, and the
-        file-like object's ``read`` method will return `str` (`unicode`)
+        file-like object's ``read`` method will return `str` (``unicode``)
         objects, decoded from binary using the given encoding.
 
     cache : bool, optional
@@ -169,7 +160,7 @@ def get_readable_fileobj(name_or_obj, encoding=None, cache=False,
 
     remote_timeout : float
         Timeout for remote requests in seconds (default is the configurable
-        REMOTE_TIMEOUT, which is 3s by default)
+        `astropy.utils.data.Conf.remote_timeout`, which is 3s by default)
 
     Returns
     -------
@@ -182,6 +173,10 @@ def get_readable_fileobj(name_or_obj, encoding=None, cache=False,
     # passed in.  In that case it is not the responsibility of this
     # function to close it: doing so could result in a "double close"
     # and an "invalid file descriptor" exception.
+    PATH_TYPES = six.string_types
+    if HAS_PATHLIB:
+        PATH_TYPES += (pathlib.Path,)
+
     close_fds = []
     delete_fds = []
 
@@ -190,8 +185,13 @@ def get_readable_fileobj(name_or_obj, encoding=None, cache=False,
         remote_timeout = conf.remote_timeout
 
     # Get a file object to the content
-    if isinstance(name_or_obj, six.string_types):
-        if _is_url(name_or_obj):
+    if isinstance(name_or_obj, PATH_TYPES):
+        # name_or_obj could be a Path object if pathlib is available
+        if HAS_PATHLIB:
+            name_or_obj = str(name_or_obj)
+
+        is_url = _is_url(name_or_obj)
+        if is_url:
             name_or_obj = download_file(
                 name_or_obj, cache=cache, show_progress=show_progress,
                 timeout=remote_timeout)
@@ -199,6 +199,8 @@ def get_readable_fileobj(name_or_obj, encoding=None, cache=False,
             fileobj = io.FileIO(name_or_obj, 'r')
         elif six.PY2:
             fileobj = open(name_or_obj, 'rb')
+        if is_url and not cache:
+            delete_fds.append(fileobj)
         close_fds.append(fileobj)
     else:
         fileobj = name_or_obj
@@ -218,7 +220,7 @@ def get_readable_fileobj(name_or_obj, encoding=None, cache=False,
     if signature[:3] == b'\x1f\x8b\x08':  # gzip
         import struct
         try:
-            from .compat import gzip
+            import gzip
             fileobj_new = gzip.GzipFile(fileobj=fileobj, mode='rb')
             fileobj_new.read(1)  # need to check that the file is really gzip
         except (IOError, EOFError):  # invalid gzip file
@@ -355,7 +357,7 @@ def get_readable_fileobj(name_or_obj, encoding=None, cache=False,
             os.remove(fd.name)
 
 
-def get_file_contents(name_or_obj, encoding=None, cache=False):
+def get_file_contents(*args, **kwargs):
     """
     Retrieves the contents of a filename or file-like object.
 
@@ -367,7 +369,7 @@ def get_file_contents(name_or_obj, encoding=None, cache=False):
         The content of the file (as requested by ``encoding``).
 
     """
-    with get_readable_fileobj(name_or_obj, encoding, cache) as f:
+    with get_readable_fileobj(*args, **kwargs) as f:
         return f.read()
 
 
@@ -403,7 +405,7 @@ def get_pkg_data_fileobj(data_name, package=None, encoding=None, cache=True):
     encoding : str, optional
         When `None` (default), returns a file-like object with a
         ``read`` method that on Python 2.x returns `bytes` objects and
-        on Python 3.x returns `str` (`unicode`) objects, using
+        on Python 3.x returns `str` (``unicode``) objects, using
         `locale.getpreferredencoding` as an encoding.  This matches
         the default behavior of the built-in `open` when no ``mode``
         argument is provided.
@@ -412,7 +414,7 @@ def get_pkg_data_fileobj(data_name, package=None, encoding=None, cache=True):
         method returns `bytes` objects.
 
         When another string, it is the name of an encoding, and the
-        file-like object's ``read`` method will return `str` (`unicode`)
+        file-like object's ``read`` method will return `str` (``unicode``)
         objects, decoded from binary using the given encoding.
 
     cache : bool
@@ -635,7 +637,7 @@ def get_pkg_data_contents(data_name, package=None, encoding=None, cache=True):
     encoding : str, optional
         When `None` (default), returns a file-like object with a
         ``read`` method that on Python 2.x returns `bytes` objects and
-        on Python 3.x returns `str` (`unicode`) objects, using
+        on Python 3.x returns `str` (``unicode``) objects, using
         `locale.getpreferredencoding` as an encoding.  This matches
         the default behavior of the built-in `open` when no ``mode``
         argument is provided.
@@ -644,7 +646,7 @@ def get_pkg_data_contents(data_name, package=None, encoding=None, cache=True):
         method returns `bytes` objects.
 
         When another string, it is the name of an encoding, and the
-        file-like object's ``read`` method will return `str` (`unicode`)
+        file-like object's ``read`` method will return `str` (``unicode``)
         objects, decoded from binary using the given encoding.
 
     cache : bool
@@ -765,7 +767,7 @@ def get_pkg_data_fileobjs(datadir, package=None, pattern='*', encoding=None):
     encoding : str, optional
         When `None` (default), returns a file-like object with a
         ``read`` method that on Python 2.x returns `bytes` objects and
-        on Python 3.x returns `str` (`unicode`) objects, using
+        on Python 3.x returns `str` (``unicode``) objects, using
         `locale.getpreferredencoding` as an encoding.  This matches
         the default behavior of the built-in `open` when no ``mode``
         argument is provided.
@@ -774,7 +776,7 @@ def get_pkg_data_fileobjs(datadir, package=None, pattern='*', encoding=None):
         method returns `bytes` objects.
 
         When another string, it is the name of an encoding, and the
-        file-like object's ``read`` method will return `str` (`unicode`)
+        file-like object's ``read`` method will return `str` (``unicode``)
         objects, decoded from binary using the given encoding.
 
     Returns
@@ -999,7 +1001,7 @@ def download_file(remote_url, cache=False, show_progress=True, timeout=None):
 
     if timeout is None:
         # use configfile default
-        timeout = REMOTE_TIMEOUT()
+        timeout = conf.remote_timeout()
 
     if cache:
         try:
@@ -1124,10 +1126,16 @@ def is_url_in_cache(url_key):
         estr = '' if len(e.args) < 1 else (': ' + str(e))
         warn(CacheMissingWarning(msg + e.__class__.__name__ + estr))
         return False
+
+    if six.PY2 and isinstance(url_key, six.text_type):
+        # shelve DBs don't accept unicode strings in Python 2
+        url_key = url_key.encode('utf-8')
+
     with _open_shelve(urlmapfn, True) as url2hash:
         if url_key in url2hash:
             return True
     return False
+
 
 def _do_download_files_in_parallel(args):
     return download_file(*args, show_progress=False)
@@ -1213,13 +1221,7 @@ def clear_download_cache(hashorurl=None):
     hashorurl : str or None
         If None, the whole cache is cleared.  Otherwise, either specifies a
         hash for the cached file that is supposed to be deleted, or a URL that
-        has previously been downloaded to the cache.
-
-    Raises
-    ------
-    OSEerror
-        If the requested filename is not present in the data directory.
-
+        should be removed from the cache if present.
     """
 
     try:
@@ -1233,10 +1235,11 @@ def clear_download_cache(hashorurl=None):
     _acquire_download_cache_lock()
     try:
         if hashorurl is None:
+            # dldir includes both the download files and the urlmapfn.  This structure
+            # is required since we cannot know a priori the actual file name corresponding
+            # to the shelve map named urlmapfn.
             if os.path.exists(dldir):
                 shutil.rmtree(dldir)
-            if os.path.exists(urlmapfn):
-                os.unlink(urlmapfn)
         else:
             with _open_shelve(urlmapfn, True) as url2hash:
                 filepath = os.path.join(dldir, hashorurl)
@@ -1258,13 +1261,16 @@ def clear_download_cache(hashorurl=None):
                 elif hash_key in url2hash:
                     filepath = url2hash[hash_key]
                     del url2hash[hash_key]
-                    os.unlink(filepath)
-                else:
-                    msg = 'Could not find file or url {0}'
-                    raise OSError(msg.format(hashorurl))
+                    if os.path.exists(filepath):
+                        # Make sure the filepath still actually exists (perhaps user removed it)
+                        os.unlink(filepath)
+                # Otherwise could not find file or url, but no worries.
+                # Clearing download cache just makes sure that the file or url
+                # is no longer in the cache regardless of starting condition.
+
     finally:
         # the lock will be gone if rmtree was used above, but release otherwise
-        if os.path.exists(os.path.join(_get_download_cache_locs()[0], 'lock')):
+        if os.path.exists(os.path.join(dldir, 'lock')):
             _release_download_cache_lock()
 
 
@@ -1281,12 +1287,18 @@ def _get_download_cache_locs():
     """
     from ..config.paths import get_cache_dir
 
-    datadir = os.path.join(get_cache_dir(), 'download')
-    shelveloc = os.path.join(get_cache_dir(), 'download_urlmap')
+    # datadir includes both the download files and the shelveloc.  This structure
+    # is required since we cannot know a priori the actual file name corresponding
+    # to the shelve map named shelveloc.  (The backend can vary and is allowed to
+    # do whatever it wants with the filename.  Filename munging can and does happen
+    # in practice).
+    py_version = 'py' + str(sys.version_info.major)
+    datadir = os.path.join(get_cache_dir(), 'download', py_version)
+    shelveloc = os.path.join(datadir, 'urlmap')
 
     if not os.path.exists(datadir):
         try:
-            os.mkdir(datadir)
+            os.makedirs(datadir)
         except OSError as e:
             if not os.path.exists(datadir):
                 raise
@@ -1303,18 +1315,15 @@ def _get_download_cache_locs():
 
 def _open_shelve(shelffn, withclosing=False):
     """
-    opens a shelf in a way that is py3.x and py2.x compatible.  If
-    `withclosing` is  True, it will be opened with closing, allowing use like:
+    Opens a shelf file.  If `withclosing` is  True, it will be opened with closing,
+    allowing use like:
 
         with _open_shelve('somefile',True) as s:
             ...
     """
     import shelve
 
-    if six.PY2:
-        shelf = shelve.open(shelffn, protocol=2)
-    elif six.PY3:
-        shelf = shelve.open(shelffn + '.db', protocol=2)
+    shelf = shelve.open(shelffn, protocol=2)
 
     if withclosing:
         return contextlib.closing(shelf)
@@ -1342,7 +1351,9 @@ def _acquire_download_cache_lock():
             time.sleep(1)
         else:
             return
-    msg = 'Unable to acquire lock for cache directory ({0} exists)'
+    msg = ("Unable to acquire lock for cache directory ({0} exists). "
+           "You may need to delete the lock if the python interpreter wasn't "
+           "shut down properly.")
     raise RuntimeError(msg.format(lockdir))
 
 

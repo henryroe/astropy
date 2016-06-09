@@ -9,7 +9,7 @@ from copy import deepcopy
 from .decorators import support_nddata
 from astropy.utils import lazyproperty
 from astropy.coordinates import SkyCoord
-from astropy.wcs.utils import skycoord_to_pixel
+from astropy.wcs.utils import skycoord_to_pixel, proj_plane_pixel_scales
 from astropy import units as u
 
 
@@ -169,7 +169,7 @@ def extract_array(array_large, shape, position, mode='partial',
         `int`).  See the ``mode`` keyword for additional details.
     position : tuple of numbers or number
         The position of the small array's center with respect to the
-        large array.  The pixel cordinates should be in the same order
+        large array.  The pixel coordinates should be in the same order
         as the array shape.  Integer positions are at the pixel centers
         (for 1D arrays, this can be a number).
     mode : {'partial', 'trim', 'strict'}, optional
@@ -473,30 +473,31 @@ def block_replicate(data, block_size, conserve_sum=True):
 
 
 class Cutout2D(object):
-    """Create a cutout object from a 2D array."""
+    """
+    Create a cutout object from a 2D array.
 
-    def __init__(self, data, position, shape=None, side_length=None, wcs=None,
-                 mode='trim', fill_value=np.nan, copy=False):
+    The returned object will contain a 2D cutout array.  If
+    ``copy=False`` (default), the cutout array is a view into the
+    original ``data`` array, otherwise the cutout array will contain a
+    copy of the original data.
+
+    If a `~astropy.wcs.WCS` object is input, then the returned object
+    will also contain a copy of the original WCS, but updated for the
+    cutout array.
+
+    For example usage, see :ref:`cutout_images`.
+
+    .. warning::
+
+        The cutout WCS object does not currently handle cases where the
+        input WCS object contains distortion lookup tables described in
+        the `FITS WCS distortion paper
+        <http://www.atnf.csiro.au/people/mcalabre/WCS/dcs_20040422.pdf>`__.
+    """
+
+    def __init__(self, data, position, size, wcs=None, mode='trim',
+                 fill_value=np.nan, copy=False):
         """
-        The returned object will contain a 2D cutout array.  If
-        ``copy=False`` (default), the cutout array is a view into the
-        original ``data`` array, otherwise the cutout array will contain
-        a copy of the original data.
-
-        If a `~astropy.wcs.WCS` object is input, then the returned
-        object will also contain a copy of the original WCS, but updated
-        for the cutout array.
-
-        The shape of the cutout is determined by the ``shape`` parameter, or
-        ``side_length`` for a square cutout.
-
-        For example usage, see :ref:`cutout_images`.
-
-        .. warning::
-
-            The cutout WCS object does not currently handle cases where
-            the input WCS object contains tabular distortions.
-
         Parameters
         ----------
         data : `~numpy.ndarray`
@@ -509,17 +510,27 @@ class Cutout2D(object):
             `~astropy.coordinates.SkyCoord`, in which case ``wcs`` is a
             required input.
 
-        shape : tuple, optional
-            The shape (``(ny, nx)``) of the cutout array in pixel
-            coordinates (but see the ``mode`` keyword for additional
-            details). May be specified as a `~astropy.units.Quantity`
-            equivalent to pixels.
+        size : int, array-like, `~astropy.units.Quantity`
+            The size of the cutout array along each axis.  If ``size``
+            is a scalar number or a scalar `~astropy.units.Quantity`,
+            then a square cutout of ``size`` will be created.  If
+            ``size`` has two elements, they should be in ``(ny, nx)``
+            order.  Scalar numbers in ``size`` are assumed to be in
+            units of pixels.  ``size`` can also be a
+            `~astropy.units.Quantity` object or contain
+            `~astropy.units.Quantity` objects.  Such
+            `~astropy.units.Quantity` objects must be in pixel or
+            angular units.  For all cases, ``size`` will be converted to
+            an integer number of pixels, rounding the the nearest
+            integer.  See the ``mode`` keyword for additional details on
+            the final cutout size.
 
-        side_length : scalar, optional
-            The length (in pixel coordinates) of a side in a square cutout
-            array. ``shape`` will be set to ``(side_length, side_length)``.
-            See the ``mode`` keyword for additional details. May be specified
-            as a `~astropy.units.Quantity` equivalent to pixels.
+            .. note::
+                If ``size`` is in angular units, the cutout size is
+                converted to pixels using the pixel scales along each
+                axis of the image at the ``CRPIX`` location.  Projection
+                and other non-linear distortions are not taken into
+                account.
 
         wcs : `~astropy.wcs.WCS`, optional
             A WCS object associated with the input ``data`` array.  If
@@ -564,34 +575,41 @@ class Cutout2D(object):
         >>> from astropy.nddata.utils import Cutout2D
         >>> from astropy import units as u
         >>> data = np.arange(20.).reshape(5, 4)
-        >>> c1 = Cutout2D(data, (2, 2), (3, 3))
-        >>> print(c1.data)
+        >>> cutout1 = Cutout2D(data, (2, 2), (3, 3))
+        >>> print(cutout1.data)
         [[  5.   6.   7.]
          [  9.  10.  11.]
          [ 13.  14.  15.]]
 
-        >>> print(c1.center_original)
+        >>> print(cutout1.center_original)
         (2.0, 2.0)
-        >>> print(c1.center_cutout)
+        >>> print(cutout1.center_cutout)
         (1.0, 1.0)
-        >>> print(c1.origin_original)
+        >>> print(cutout1.origin_original)
         (1, 1)
 
-        >>> c2 = Cutout2D(data, (0, 0), shape=(3*u.pixel, 3*u.pixel))
-        >>> print(c2.data)
+        >>> cutout2 = Cutout2D(data, (2, 2), 3)
+        >>> print(cutout2.data)
+        [[  5.   6.   7.]
+         [  9.  10.  11.]
+         [ 13.  14.  15.]]
+
+        >>> size = u.Quantity([3, 3], u.pixel)
+        >>> cutout3 = Cutout2D(data, (0, 0), size)
+        >>> print(cutout3.data)
         [[ 0.  1.]
          [ 4.  5.]]
 
-        >>> c3 = Cutout2D(data, (0, 0), shape=(3, 3), mode='partial')
-        >>> print(c3.data)
+        >>> cutout4 = Cutout2D(data, (0, 0), (3 * u.pixel, 3))
+        >>> print(cutout4.data)
+        [[ 0.  1.]
+         [ 4.  5.]]
+
+        >>> cutout5 = Cutout2D(data, (0, 0), (3, 3), mode='partial')
+        >>> print(cutout5.data)
         [[ nan  nan  nan]
          [ nan   0.   1.]
          [ nan   4.   5.]]
-
-        >>> c4 = Cutout2D(data, (0, 0), side_length=3)
-        >>> print(c4.data)
-        [[ 0.  1.]
-         [ 4.  5.]]
         """
 
         if isinstance(position, SkyCoord):
@@ -600,23 +618,48 @@ class Cutout2D(object):
                                  'SkyCoord')
             position = skycoord_to_pixel(position, wcs, mode='all')  # (x, y)
 
-        if side_length is None and shape is None:
-            raise ValueError("Either side_length or shape must be specified")
+        if np.isscalar(size):
+            size = np.repeat(size, 2)
 
-        if side_length is not None and shape is not None:
-            raise ValueError("Cannot specify both side_length and shape")
+        # special handling for a scalar Quantity
+        if isinstance(size, u.Quantity):
+            size = np.atleast_1d(size)
+            if len(size) == 1:
+                size = np.repeat(size, 2)
 
-        if side_length is not None:
-            shape = (side_length, side_length)
+        if len(size) > 2:
+            raise ValueError('size must have at most two elements')
 
-        shape = [x.value if u.pixel.is_equivalent(x) else x for x in shape]
-
-        # extract_array and overlap_slices use (y, x) positions
-        pos = position[::-1]
+        shape = np.zeros(2).astype(int)
+        pixel_scales = None
+        # ``size`` can have a mixture of int and Quantity (and even units),
+        # so evaluate each axis separately
+        for axis, side in enumerate(size):
+            if not isinstance(side, u.Quantity):
+                shape[axis] = np.int(np.round(size[axis]))     # pixels
+            else:
+                if side.unit == u.pixel:
+                    shape[axis] = np.int(np.round(side.value))
+                elif side.unit.physical_type == 'angle':
+                    if wcs is None:
+                        raise ValueError('wcs must be input if any element '
+                                         'of size has angular units')
+                    if pixel_scales is None:
+                        pixel_scales = u.Quantity(
+                            proj_plane_pixel_scales(wcs), wcs.wcs.cunit[axis])
+                    shape[axis] = np.int(np.round(
+                        (side / pixel_scales[axis]).decompose()))
+                else:
+                    raise ValueError('shape can contain Quantities with only '
+                                     'pixel or angular units')
 
         data = np.asanyarray(data)
+        # reverse position because extract_array and overlap_slices
+        # use (y, x), but keep the input position
+        pos_yx = position[::-1]
+
         cutout_data, input_position_cutout = extract_array(
-            data, shape, pos, mode=mode, fill_value=fill_value,
+            data, tuple(shape), pos_yx, mode=mode, fill_value=fill_value,
             return_position=True)
         if copy:
             cutout_data = np.copy(cutout_data)
@@ -624,7 +667,7 @@ class Cutout2D(object):
 
         self.input_position_cutout = input_position_cutout[::-1]    # (x, y)
         slices_original, slices_cutout = overlap_slices(
-            data.shape, shape, pos, mode=mode)
+            data.shape, shape, pos_yx, mode=mode)
 
         self.slices_original = slices_original
         self.slices_cutout = slices_cutout
@@ -633,11 +676,11 @@ class Cutout2D(object):
         self.input_position_original = position
         self.shape_input = shape
 
-        ((self.xmin_original, self.xmax_original),
-         (self.ymin_original, self.ymax_original)) = self.bbox_original
+        ((self.ymin_original, self.ymax_original),
+         (self.xmin_original, self.xmax_original)) = self.bbox_original
 
-        ((self.xmin_cutout, self.xmax_cutout),
-         (self.ymin_cutout, self.ymax_cutout)) = self.bbox_cutout
+        ((self.ymin_cutout, self.ymax_cutout),
+         (self.xmin_cutout, self.xmax_cutout)) = self.bbox_cutout
 
         # the true origin pixel of the cutout array, including any
         # filled cutout values
@@ -724,8 +767,8 @@ class Cutout2D(object):
 
         height, width = self.shape
         hw, hh = width / 2., height / 2.
-        pos = self.position_original - np.array([hw, hh])
-        patch = mpatches.Rectangle(pos, width, height, 0., **kwargs)
+        pos_xy = self.position_original - np.array([hw, hh])
+        patch = mpatches.Rectangle(pos_xy, width, height, 0., **kwargs)
         ax.add_patch(patch)
         return ax
 
@@ -743,14 +786,14 @@ class Cutout2D(object):
     @staticmethod
     def _calc_bbox(slices):
         """
-        Calculate a minimal bounding box in the form ``((xmin, xmax),
-        (ymin, ymax))``.  Note these are pixel locations, not slice
+        Calculate a minimal bounding box in the form ``((ymin, ymax),
+        (xmin, xmax))``.  Note these are pixel locations, not slice
         indices.  For ``mode='partial'``, the bounding box indices are
         for the valid (non-filled) cutout values.
         """
         # (stop - 1) to return the max pixel location, not the slice index
-        return ((slices[1].start, slices[1].stop - 1),
-                (slices[0].start, slices[0].stop - 1))
+        return ((slices[0].start, slices[0].stop - 1),
+                (slices[1].start, slices[1].stop - 1))
 
     @lazyproperty
     def origin_original(self):
@@ -810,7 +853,7 @@ class Cutout2D(object):
     @lazyproperty
     def bbox_original(self):
         """
-        The bounding box ``(ymin, xmin, ymax, xmax)`` of the minimal
+        The bounding box ``((ymin, ymax), (xmin, xmax))`` of the minimal
         rectangular region of the cutout array with respect to the
         original array.  For ``mode='partial'``, the bounding box
         indices are for the valid (non-filled) cutout values.
@@ -820,7 +863,7 @@ class Cutout2D(object):
     @lazyproperty
     def bbox_cutout(self):
         """
-        The bounding box ``(ymin, xmin, ymax, xmax)`` of the minimal
+        The bounding box ``((ymin, ymax), (xmin, xmax))`` of the minimal
         rectangular region of the cutout array with respect to the
         cutout array.  For ``mode='partial'``, the bounding box indices
         are for the valid (non-filled) cutout values.

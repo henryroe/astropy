@@ -11,7 +11,7 @@ from .. import fitting
 from ...tests.helper import pytest
 
 try:
-    from scipy import optimize
+    from scipy import optimize  # pylint: disable=W0611
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
@@ -34,6 +34,7 @@ def test_GaussianAbsorption1D():
     assert_allclose(g_ab(xx), 1 - g_em(xx))
     assert_allclose(g_ab.fit_deriv(xx[0], 0.8, 3000, 20),
                     -np.array(g_em.fit_deriv(xx[0], 0.8, 3000, 20)))
+    assert g_ab.bounding_box == g_em.bounding_box
 
 
 def test_Gaussian2D():
@@ -89,18 +90,18 @@ def test_Gaussian2DRotation():
     assert_allclose(value1, value2)
 
 
-def test_Redshift():
+def test_RedshiftScaleFactor():
     """Like ``test_ScaleModel()``."""
 
     # Scale by a scalar
-    m = models.Redshift(0.4)
+    m = models.RedshiftScaleFactor(0.4)
     assert m(0) == 0
     assert_array_equal(m([1, 2]), [1.4, 2.8])
 
     assert_allclose(m.inverse(m([1, 2])), [1, 2])
 
     # Scale by a list
-    m = models.Redshift([-0.5, 0, 0.5], model_set_axis=0)
+    m = models.RedshiftScaleFactor([-0.5, 0, 0.5], n_models=3)
     assert_array_equal(m(0), 0)
     assert_array_equal(m([1, 2], model_set_axis=False),
                        [[0.5, 1], [1, 2], [1.5, 3]])
@@ -161,3 +162,23 @@ def test_Voigt1D():
     fitter = fitting.LevMarLSQFitter()
     voi_fit = fitter(voi_init, xarr, yarr)
     assert_allclose(voi_fit.param_sets, voi.param_sets)
+
+
+@pytest.mark.skipif("not HAS_SCIPY")
+def test_compound_models_with_class_variables():
+    models_2d = [models.AiryDisk2D, models.Sersic2D]
+    models_1d = [models.Sersic1D]
+
+    for model_2d in models_2d:
+        class CompoundModel2D(models.Const2D + model_2d):
+            pass
+        x, y = np.mgrid[:10, :10]
+        f = CompoundModel2D()(x, y)
+        assert f.shape == (10, 10)
+
+    for model_1d in models_1d:
+        class CompoundModel1D(models.Const1D + model_1d):
+            pass
+        x = np.arange(10)
+        f = CompoundModel1D()(x)
+        assert f.shape == (10,)

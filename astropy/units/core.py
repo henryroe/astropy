@@ -311,6 +311,8 @@ def set_enabled_units(units):
       AU           | 1.49598e+11 m   | au, astronomical_unit ,
       Angstrom     | 1e-10 m         | AA, angstrom          ,
       cm           | 0.01 m          | centimeter            ,
+      earthRad     | 6.37814e+06 m   | R_earth, Rearth       ,
+      jupiterRad   | 7.1492e+07 m    | R_jup, Rjup, R_jupiter, Rjupiter ,
       lyr          | 9.46073e+15 m   | lightyear             ,
       m            | irreducible     | meter                 ,
       micron       | 1e-06 m         |                       ,
@@ -358,9 +360,11 @@ def add_enabled_units(units):
       AU           | 1.49598e+11 m   | au, astronomical_unit ,
       Angstrom     | 1e-10 m         | AA, angstrom          ,
       cm           | 0.01 m          | centimeter            ,
+      earthRad     | 6.37814e+06 m   | R_earth, Rearth       ,
       ft           | 0.3048 m        | foot                  ,
       fur          | 201.168 m       | furlong               ,
       inch         | 0.0254 m        |                       ,
+      jupiterRad   | 7.1492e+07 m    | R_jup, Rjup, R_jupiter, Rjupiter ,
       lyr          | 9.46073e+15 m   | lightyear             ,
       m            | irreducible     | meter                 ,
       mi           | 1609.34 m       | mile                  ,
@@ -1465,15 +1469,7 @@ class NamedUnit(UnitBase):
     ValueError
         If any of the given unit names are not valid Python tokens.
     """
-    def __init__(self, st, register=None, doc=None, format=None,
-                 namespace=None):
-        if register is not None:
-            warnings.warn(
-                "The registry kwarg was removed in astropy 0.3. "
-                "Use the namespace kwarg to inject the unit into "
-                "a namespace and add_enabled_units() to enable it "
-                "in the global unit registry.",
-                DeprecationWarning)
+    def __init__(self, st, doc=None, format=None, namespace=None):
 
         UnitBase.__init__(self)
 
@@ -1484,7 +1480,7 @@ class NamedUnit(UnitBase):
         elif isinstance(st, tuple):
             if not len(st) == 2:
                 raise ValueError("st must be string, list or 2-tuple")
-            self._names = st[0] + st[1]
+            self._names = st[0] + [n for n in st[1] if n not in st[0]]
             if not len(self._names):
                 raise ValueError("must provide at least one name")
             self._short_names = st[0][:]
@@ -1578,16 +1574,6 @@ class NamedUnit(UnitBase):
         """
         return self._long_names
 
-    def register(self, add_to_namespace=False):
-        raise NotImplementedError(
-            "The register method has been removed in astropy 0.3. "
-            "Use add_enabled_units/set_enabled_units instead.")
-
-    def deregister(self, remove_from_namespace=False):
-        raise NotImplementedError(
-            "The deregister method has been removed in astropy 0.3. "
-            "Use add_enabled_units/set_enabled_units instead.")
-
     def _inject(self, namespace=None):
         """
         Injects the unit, and all of its aliases, in the given
@@ -1643,8 +1629,16 @@ class IrreducibleUnit(NamedUnit):
                 (self.__class__, list(self.names), self.name in registry),
                 self.__dict__)
 
+    @property
+    def represents(self):
+        """The unit that this named unit represents.
+
+        For an irreducible unit, that is always itself.
+        """
+        return self
+
     def decompose(self, bases=set()):
-        if len(bases) and not self in bases:
+        if len(bases) and self not in bases:
             for base in bases:
                 try:
                     scale = self._to(base)
@@ -1906,22 +1900,19 @@ class Unit(NamedUnit):
         If any of the given unit names are not valid Python tokens.
     """
 
-    def __init__(self, st, represents=None, register=None, doc=None,
+    def __init__(self, st, represents=None, doc=None,
                  format=None, namespace=None):
-
-        if register is not None:
-            warnings.warn(
-                "The registry kwarg was removed in astropy 0.3. "
-                "Use the namespace kwarg to inject the unit into "
-                "a namespace and add_enabled_units() to enable it "
-                "in the global unit registry.",
-                DeprecationWarning)
 
         represents = Unit(represents)
         self._represents = represents
 
         NamedUnit.__init__(self, st, namespace=namespace, doc=doc,
                            format=format)
+
+    @property
+    def represents(self):
+        """The unit that this named unit represents."""
+        return self._represents
 
     def decompose(self, bases=set()):
         return self._represents.decompose(bases=bases)
@@ -1978,7 +1969,7 @@ class CompositeUnit(UnitBase):
                 if not isinstance(base, UnitBase):
                     raise TypeError(
                         "bases must be sequence of UnitBase instances")
-            powers = [validate_power(p, support_tuples=True) for p in powers]
+            powers = [validate_power(p) for p in powers]
 
         self._scale = scale
         self._bases = bases
@@ -2077,8 +2068,7 @@ class CompositeUnit(UnitBase):
         new_parts.sort(key=lambda x: (-x[1], getattr(x[0], 'name', '')))
 
         self._bases = [x[0] for x in new_parts]
-        self._powers = [validate_power(x[1], support_tuples=True)
-                        for x in new_parts]
+        self._powers = [validate_power(x[1]) for x in new_parts]
         self._scale = sanitize_scale(scale)
 
     def __copy__(self):
@@ -2203,9 +2193,8 @@ def _add_prefixes(u, excludes=[], namespace=None, prefixes=False):
                        namespace=namespace, format=format)
 
 
-def def_unit(s, represents=None, register=None, doc=None,
-             format=None, prefixes=False, exclude_prefixes=[],
-             namespace=None):
+def def_unit(s, represents=None, doc=None, format=None, prefixes=False,
+             exclude_prefixes=[], namespace=None):
     """
     Factory function for defining new units.
 
@@ -2261,13 +2250,6 @@ def def_unit(s, represents=None, register=None, doc=None,
         The newly-defined unit, or a matching unit that was already
         defined.
     """
-    if register is not None:
-        warnings.warn(
-            "The register kwarg was removed in astropy 0.3. "
-            "Use the namespace kwarg to inject the unit into "
-            "a namespace and add_enabled_units() to enable it "
-            "in the global unit registry.",
-            DeprecationWarning)
 
     if represents is not None:
         result = Unit(s, represents, namespace=namespace, doc=doc,

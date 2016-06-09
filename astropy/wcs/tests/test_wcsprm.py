@@ -51,16 +51,16 @@ def test_cd():
     w = _wcs.Wcsprm()
     w.cd = [[1, 0], [0, 1]]
     assert w.cd.dtype == np.float
-    assert w.has_cd() == True
+    assert w.has_cd() is True
     assert_array_equal(w.cd, [[1, 0], [0, 1]])
     del w.cd
-    assert w.has_cd() == False
+    assert w.has_cd() is False
 
 
 @raises(AttributeError)
 def test_cd_missing():
     w = _wcs.Wcsprm()
-    assert w.has_cd() == False
+    assert w.has_cd() is False
     w.cd
 
 
@@ -68,9 +68,9 @@ def test_cd_missing():
 def test_cd_missing2():
     w = _wcs.Wcsprm()
     w.cd = [[1, 0], [0, 1]]
-    assert w.has_cd() == True
+    assert w.has_cd() is True
     del w.cd
-    assert w.has_cd() == False
+    assert w.has_cd() is False
     w.cd
 
 
@@ -179,16 +179,16 @@ def test_crota():
     w = _wcs.Wcsprm()
     w.crota = [1, 0]
     assert w.crota.dtype == np.float
-    assert w.has_crota() == True
+    assert w.has_crota() is True
     assert_array_equal(w.crota, [1, 0])
     del w.crota
-    assert w.has_crota() == False
+    assert w.has_crota() is False
 
 
 @raises(AttributeError)
 def test_crota_missing():
     w = _wcs.Wcsprm()
-    assert w.has_crota() == False
+    assert w.has_crota() is False
     w.crota
 
 
@@ -196,9 +196,9 @@ def test_crota_missing():
 def test_crota_missing2():
     w = _wcs.Wcsprm()
     w.crota = [1, 0]
-    assert w.has_crota() == True
+    assert w.has_crota() is True
     del w.crota
-    assert w.has_crota() == False
+    assert w.has_crota() is False
     w.crota
 
 
@@ -813,15 +813,17 @@ def test_header_parse():
             'data/header_newlines.fits', encoding='binary') as test_file:
         hdulist = fits.open(test_file)
         w = wcs.WCS(hdulist[0].header)
-    assert w.wcs.ctype[0] == 'RA---TAN'
+    assert w.wcs.ctype[0] == 'RA---TAN-SIP'
 
 
 def test_locale():
     orig_locale = locale.getlocale(locale.LC_NUMERIC)[0]
 
     try:
-        locale.setlocale(locale.LC_NUMERIC, 'fr_FR')
-    except:
+        # str('fr_FR') because otherwise it will be a unicode string, which
+        # breaks setlocale on Python 2
+        locale.setlocale(locale.LC_NUMERIC, str('fr_FR'))
+    except locale.Error:
         pytest.xfail(
             "Can't set to 'fr_FR' locale, perhaps because it is not installed "
             "on this system")
@@ -830,7 +832,13 @@ def test_locale():
         w = _wcs.Wcsprm(header)
         assert re.search("[0-9]+,[0-9]*", w.to_header()) is None
     finally:
-        locale.setlocale(locale.LC_NUMERIC, orig_locale)
+        if orig_locale is None:
+            # reset to the default setting
+            locale.resetlocale(locale.LC_NUMERIC)
+        else:
+            # restore to whatever the previous value had been set to for
+            # whatever reason
+            locale.setlocale(locale.LC_NUMERIC, orig_locale)
 
 
 @raises(UnicodeEncodeError)
@@ -893,14 +901,13 @@ def test_compare():
     assert w.compare(w2, tolerance=1e-6)
 
 
-@pytest.mark.xfail()
 def test_radesys_defaults():
     w = _wcs.Wcsprm()
     w.ctype = ['RA---TAN', 'DEC--TAN']
     w.set()
     assert w.radesys == "ICRS"
 
-@pytest.mark.xfail()
+
 def test_radesys_defaults_full():
 
     # As described in Section 3.1 of the FITS standard "Equatorial and ecliptic

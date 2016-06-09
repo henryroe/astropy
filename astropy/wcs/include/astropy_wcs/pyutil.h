@@ -12,6 +12,7 @@
 
 #include <Python.h>
 
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/arrayobject.h>
 #include <numpy/npy_math.h>
 
@@ -163,6 +164,9 @@ void
 wcs_to_python_exc(const struct wcsprm *wcs);
 
 void
+wcshdr_err_to_python_exc(int status);
+
+void
 wcserr_fix_to_python_exc(const struct wcserr *err);
 
 /***************************************************************************
@@ -254,7 +258,7 @@ get_double_array(
     const npy_intp* dims,
     /*@shared@*/ PyObject* owner) {
 
-  return PyArrayProxy_New(owner, ndims, dims, PyArray_DOUBLE, value);
+  return PyArrayProxy_New(owner, ndims, dims, NPY_DOUBLE, value);
 }
 
 /*@null@*/ static INLINE PyObject*
@@ -265,7 +269,7 @@ get_double_array_readonly(
     const npy_intp* dims,
     /*@shared@*/ PyObject* owner) {
 
-  return PyArrayReadOnlyProxy_New(owner, ndims, dims, PyArray_DOUBLE, value);
+  return PyArrayReadOnlyProxy_New(owner, ndims, dims, NPY_DOUBLE, value);
 }
 
 int
@@ -284,7 +288,7 @@ get_int_array(
     const npy_intp* dims,
     /*@shared@*/ PyObject* owner) {
 
-  return PyArrayProxy_New(owner, ndims, dims, PyArray_INT, value);
+  return PyArrayProxy_New(owner, ndims, dims, NPY_INT, value);
 }
 
 int

@@ -9,6 +9,7 @@ Time and Dates (`astropy.time`)
 .. |Quantity| replace:: :class:`~astropy.units.Quantity`
 .. |Longitude| replace:: :class:`~astropy.coordinates.Longitude`
 .. |EarthLocation| replace:: :class:`~astropy.coordinates.EarthLocation`
+.. |SkyCoord| replace:: :class:`~astropy.coordinates.SkyCoord`
 
 Introduction
 ============
@@ -90,10 +91,9 @@ than for ``t`` because they are expressed relative to the TT time scale.  Of
 course, from the numbers or strings one could not tell; one format in which
 this information is kept is the ``fits`` format::
 
-  >>> t2.fits
-  array(['1999-01-01T00:01:04.307(TT)', '2010-01-01T00:01:06.184(TT)'],
-        dtype='|S27')
-  
+  >>> print(t2.fits)
+  ['1999-01-01T00:01:04.307(TT)' '2010-01-01T00:01:06.184(TT)']
+
 Finally, some further examples of what is possible.  For details, see
 the API documentation below.
 
@@ -175,7 +175,7 @@ yday         :class:`~astropy.time.TimeYearDayTime`             2000:001:00:00:0
    initialization.  Furthermore, any specific realization information,
    such as ``UT(NIST)`` is stored only as long as the time scale is not changed.
 .. [#] `Rots et al. 2015, A&A 574:A36 <http://adsabs.harvard.edu/abs/2015A%26A...574A..36R>`_
-	  
+
 Changing format
 """""""""""""""
 
@@ -310,7 +310,7 @@ appropriate::
   >>> t[2]
   <Time object: scale='utc' format='mjd' value=300.0>
   >>> t = Time(np.arange(50000., 50003.)[:, np.newaxis],
-  ...          np.arange(0., 1., 0.5), format='mjd') 
+  ...          np.arange(0., 1., 0.5), format='mjd')
   >>> t
   <Time object: scale='utc' format='mjd' value=[[ 50000.   50000.5]
    [ 50001.   50001.5]
@@ -645,6 +645,35 @@ process of changing the time scale therefore begins by making a copy of the
 original object and then converting the internal time values in the copy to the
 new time scale.  The new |Time| object is returned by the attribute access.
 
+Caching
+^^^^^^^
+
+The computations for transforming to different time scales or formats can be
+time-consuming for large arrays.  In order to avoid repeated computations, each
+|Time| or |TimeDelta| instance caches such transformations internally::
+
+  >>> t = Time(np.arange(1e6), format='unix', scale='utc')  # doctest: +SKIP
+
+  >>> time x = t.tt  # doctest: +SKIP
+  CPU times: user 263 ms, sys: 4.02 ms, total: 267 ms
+  Wall time: 267 ms
+
+  >>> time x = t.tt  # doctest: +SKIP
+  CPU times: user 28 µs, sys: 9 µs, total: 37 µs
+  Wall time: 32.9 µs
+
+Actions such as changing the output precision or sub-format will clear
+the cache.  In order to explicitly clear the internal cache do::
+
+  >>> del t.cache  # doctest: +SKIP
+
+  >>> time x = t.tt  # doctest: +SKIP
+  CPU times: user 263 ms, sys: 4.02 ms, total: 267 ms
+  Wall time: 267 ms
+
+Since these objects are immutable (cannot be changed internally), this should
+not normally be required.
+
 Transformation offsets
 """"""""""""""""""""""
 
@@ -663,23 +692,35 @@ UT1 - UTC and TDB - TT, respectively.  As an example::
   >>> t.ut1.iso    # ISO representation of time in UT1 scale
   '2010-01-01 00:00:00.334'
 
-For the UT1 to UTC offset, one has to interpolate in observed values provided
-by the `International Earth Rotation and Reference Systems Service
-<http://www.iers.org>`_.  By default, Astropy is shipped with the final
+For the UT1 to UTC offset, one has to interpolate the observed values provided
+by the `International Earth Rotation and Reference Systems (IERS) Service
+<http://www.iers.org>`_.  Astropy will automatically download and use values
+from the IERS which cover times spanning from 1973-Jan-01 through one year into
+the future.  In addition the astropy package is bundled with a data table of
 values provided in Bulletin B, which cover the period from 1962 to shortly
-before an astropy release, and these will be used to compute the offset if the
-:attr:`~astropy.time.Time.delta_ut1_utc` attribute is not set explicitly.  For
-more recent times, one can download an updated version of `IERS B
-<http://hpiers.obspm.fr/iers/eop/eopc04/eopc04_IAU2000.62-now>`_ or `IERS A
-<http://maia.usno.navy.mil/ser7/finals2000A.all>`_ (which also has
-predictions), and set :attr:`~astropy.time.Time.delta_ut1_utc` as described in
-`~astropy.time.Time.get_delta_ut1_utc`::
+before an astropy release.
 
-  >>> from astropy.utils.iers import IERS_A, IERS_A_URL
-  >>> from astropy.utils.data import download_file
-  >>> iers_a_file = download_file(IERS_A_URL, cache=True)  # doctest: +SKIP
-  >>> iers_a = IERS_A.open(iers_a_file)                     # doctest: +SKIP
-  >>> t.delta_ut1_utc = t.get_delta_ut1_utc(iers_a)         # doctest: +SKIP
+When the :attr:`~astropy.time.Time.delta_ut1_utc` attribute is not set
+explicitly then IERS values will be used (initiating a download of a few Mb
+file the first time).  For details about how IERS values are used in astropy
+time and coordinates, and to understand how to control automatic downloads see
+:ref:`utils-iers`.  The example below illustrates converting to the ``UT1``
+scale along with the auto-download feature::
+
+  >>> t = Time('2016:001')
+  >>> t.ut1  # doctest: +SKIP
+  Downloading http://maia.usno.navy.mil/ser7/finals2000A.all
+  |==================================================================| 3.0M/3.0M (100.00%)         6s
+  <Time object: scale='ut1' format='yday' value=2016:001:00:00:00.082>
+
+.. note:: The :class:`~astropy.utils.iers.IERS_Auto` class contains machinery
+    to ensure that the IERS table is kept up to date by auto-downloading the
+    latest version as needed.  This means that the IERS table is assured of
+    having the state-of-the-art definitive and predictive values for Earth
+    rotation.  As a user it is **your responsibility** to understand the
+    accuracy of IERS predictions if your science depends on that.  If you
+    request ``UT1-UTC`` for times beyond the range of IERS table data then the
+    nearest available values will be provided.
 
 In the case of the TDB to TT offset, most users need only provide the ``lon``
 and ``lat`` values when creating the |Time| object.  If the
@@ -784,7 +825,7 @@ Use of the |TimeDelta| object is easily illustrated in the few examples below::
   >>> t2 - dt2  # Subtract a TimeDelta from a Time
   <Time object: scale='utc' format='iso' value=2010-01-31 23:59:10.000>
 
-  >>> dt + dt2
+  >>> dt + dt2  # doctest: +FLOAT_CMP
   <TimeDelta object: scale='tai' format='jd' value=31.0005787037>
 
   >>> import numpy as np
@@ -825,7 +866,7 @@ differenced::
 
   >>> dt.tt  # doctest: +FLOAT_CMP
   <TimeDelta object: scale='tt' format='jd' value=364.999999746>
-  >>> dt.tdb
+  >>> dt.tdb  # doctest: +IGNORE_EXCEPTION_DETAIL
   Traceback (most recent call last):
     ...
   ScaleValueError: Cannot convert TimeDelta with scale 'tcg' to scale 'tdb'
@@ -836,6 +877,56 @@ object (or is TAI in case of a UTC time)::
 
   >>> t2.tai + TimeDelta(365., format='jd', scale=None)
   <Time object: scale='tai' format='iso' value=2011-12-31 23:59:27.068>
+
+.. _time-light-travel-time:
+
+Barycentric and Heliocentric Light Travel Time Corrections
+------------------------------------------------------------
+
+The arrival times of photons at an observatory are not particularly useful for
+accurate timing work, such as eclipse/transit timing of binaries or exoplanets.
+This is because the changing location of the observatory causes photons to
+arrive early or late. The solution is to calculate the time the photon would
+have arrived at a standard location; either the Solar system barycentre or the
+heliocentre.
+
+Suppose you observed IP Peg from Greenwich and have a list of times in MJD form, in
+the UTC timescale. You then create appropriate |Time| and |SkyCoord| objects and
+calculate light travel times to the barycentre as follows::
+
+    >>> from astropy import time, coordinates as coord, units as u
+    >>> ip_peg = coord.SkyCoord("23:23:08.55", "+18:24:59.3",
+    ...                         unit=(u.hourangle, u.deg), frame='icrs')
+    >>> greenwich = coord.EarthLocation.of_site('greenwich')
+    >>> times = time.Time([56325.95833333, 56325.978254], format='mjd',
+    ...                   scale='utc', location=greenwich)
+    >>> ltt_bary = times.light_travel_time(ip_peg)
+
+If you desire the light travel time to the heliocentre instead then use::
+
+    >>> ltt_helio = times.light_travel_time(ip_peg, 'heliocentric')
+
+The method returns an |TimeDelta| object, which can be added to
+your times to give the arrival time of the photons at the barycentre or
+heliocentre.  Here, one should be careful with the timescales used; for more
+detailed information about timescales, see :ref:`time-scale`.
+
+The heliocentre is not a fixed point, and therefore the gravity
+continually changes at the heliocentre. Thus, the use of a relativistic
+timescale like TDB is not particularly appropriate, and, historically,
+times corrected to the heliocentre are given in the UTC timescale::
+
+    >>> times_heliocentre = times.utc + ltt_helio
+
+Corrections to the barycentre are more precise than the heliocentre,
+because the barycenter is a fixed point where gravity is constant. For
+maximum accuracy you want to have your barycentric corrected times in a
+timescale that has always ticked at a uniform rate, and ideally one
+whose tick rate is related to the rate that a clock would tick at the
+barycentre. For this reason, barycentric corrected times normally use
+the TDB timescale::
+
+    >>> time_barycentre = times.tdb + ltt_bary
 
 Interaction with Time-like Quantities
 -------------------------------------
@@ -920,7 +1011,43 @@ format specification.  By default this checks for valid float, float array, or
 |Quantity| inputs.  In contrast the ``iso`` format class ensures the inputs
 meet the ISO format spec for strings.
 
-One special case that is relatively common and easier to implement is a
+One special case that is relatively common and easier to implement is a format
+that makes a small change to the date format. For instance one could insert ``T``
+in the ``yday`` format with the following ``TimeYearDayTimeCustom`` class. Notice how
+the ``subfmts`` definition is modified slightly from the standard
+`~astropy.time.TimeISO` class from which it inherits::
+
+  >>> from astropy.time import TimeISO
+  >>> class TimeYearDayTimeCustom(TimeISO):
+  ...    """
+  ...    Year, day-of-year and time as "<YYYY>-<DOY>T<HH>:<MM>:<SS.sss...>".
+  ...    The day-of-year (DOY) goes from 001 to 365 (366 in leap years).
+  ...    For example, 2000-001T00:00:00.000 is midnight on January 1, 2000.
+  ...    The allowed subformats are:
+  ...    - 'date_hms': date + hours, mins, secs (and optional fractional secs)
+  ...    - 'date_hm': date + hours, mins
+  ...    - 'date': date
+  ...    """
+  ...    name = 'yday_custom'  # Unique format name
+  ...    subfmts = (('date_hms',
+  ...                '%Y-%jT%H:%M:%S',
+  ...                '{year:d}-{yday:03d}T{hour:02d}:{min:02d}:{sec:02d}'),
+  ...               ('date_hm',
+  ...                '%Y-%jT%H:%M',
+  ...                '{year:d}-{yday:03d}T{hour:02d}:{min:02d}'),
+  ...               ('date',
+  ...                '%Y-%j',
+  ...                '{year:d}-{yday:03d}'))
+
+
+  >>> t = Time('2000-01-01')
+  >>> t.yday_custom
+  '2000-001T00:00:00.000'
+  >>> t2 = Time('2016-001T00:00:00')
+  >>> t2.iso
+  '2016-01-01 00:00:00.000'
+
+Another special case that is relatively common is a
 format that represents the time since a particular epoch.  The classic example
 is Unix time which is the number of seconds since 1970-01-01 00:00:00 UTC,
 not counting leap seconds.  What if we wanted that value but **do** want
@@ -951,6 +1078,31 @@ Going beyond this will probably require looking at the astropy code for more
 guidance, but if you get stuck the astropy developers are more than happy to
 help.  If you write a format class that is widely useful then we might want to
 include it in the core!
+
+
+Timezones
+---------
+
+When a `~astropy.time.Time` object is constructed from a timezone-aware
+`~datetime.datetime`, no timezone information is saved in the
+`~astropy.time.Time` object. However, `~astropy.time.Time` objects can be
+converted to timezone-aware datetime objects::
+
+  >>> from datetime import datetime
+  >>> from astropy.time import Time, TimezoneInfo
+  >>> import astropy.units as u
+  >>> utc_plus_one_hour = TimezoneInfo(utc_offset=1*u.hour)
+  >>> dt_aware = datetime(2000, 1, 1, 0, 0, 0, tzinfo=utc_plus_one_hour)
+  >>> t = Time(dt_aware)  # Loses timezone info, converts to UTC
+  >>> print(t)            # will return UTC
+  1999-12-31 23:00:00
+  >>> print(t.to_datetime(timezone=utc_plus_one_hour)) # to timezone-aware datetime
+  2000-01-01 00:00:00+01:00
+
+Timezone database packages, like `pytz <http://pythonhosted.org/pytz/>`_
+for example, may be more convenient to use to create `~datetime.tzinfo`
+objects used to specify timezones rather than the `~astropy.time.TimezoneInfo`
+object.
 
 Reference/API
 =============

@@ -15,7 +15,6 @@ from ..angles import Longitude, Latitude, Angle
 from ...tests.helper import pytest
 from ... import units as u
 from ..errors import IllegalSecondError, IllegalMinuteError, IllegalHourError
-from ...utils.compat import NUMPY_LT_1_7
 
 
 def test_create_angles():
@@ -48,6 +47,8 @@ def test_create_angles():
     a10 = Angle(3.60827466667, unit=u.hour)
     a11 = Angle("3:36:29.7888000120", unit=u.hour)
     a12 = Angle((3, 36, 29.7888000120), unit=u.hour)  # *must* be a tuple
+    # Regression test for #5001
+    a13 = Angle((3, 36, 29.7888000120), unit='hour')
 
     Angle(0.944644098745, unit=u.radian)
 
@@ -55,12 +56,16 @@ def test_create_angles():
         Angle(54.12412)
         #raises an exception because this is ambiguous
 
+    with pytest.raises(u.UnitsError):
+        Angle(54.12412, unit=u.m)
+
     with pytest.raises(ValueError):
-        a13 = Angle(12.34, unit="not a unit")
+        Angle(12.34, unit="not a unit")
 
     a14 = Angle("03h36m29.7888000120") # no trailing 's', but unambiguous
 
     a15 = Angle("5h4m3s") # single digits, no decimal
+    assert a15.unit == u.hourangle
 
     a16 = Angle("1 d")
     a17 = Angle("1 degree")
@@ -86,7 +91,7 @@ def test_create_angles():
     assert_allclose(a6.radian, a7.radian)
 
     assert_allclose(a10.degree, a11.degree)
-    assert a11 == a12 == a14
+    assert a11 == a12 == a13 == a14
     assert a21 == a22
     assert a23 == -a24
 
@@ -868,14 +873,6 @@ def test_repr_latex():
     # and array angles
     arrangle = Angle([1, 2.1], u.deg)
     rlarrangle = arrangle._repr_latex_()
-
-    if NUMPY_LT_1_7:
-        # numpy 1.6 gives weird latex output for unclear reasons.  We don't care
-        # that much though, so just xfail after making sure it isn't
-        # over-backslashing
-        assert '\\\\' not in rlscangle
-        assert '\\\\' not in rlarrangle
-        pytest.xfail('numpy 1.6 does not give correct to_string latex output')
 
     assert rlscangle == '$2^\circ06{}^\prime00{}^{\prime\prime}$'
     assert rlscangle.split('$')[1] in rlarrangle

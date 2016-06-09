@@ -151,7 +151,7 @@ Enable PEP8 compliance testing with ``pep8=True`` in the call to
 Tox
 ---
 
-`Tox <http://tox.readthedocs.org>`_ is a sort of meta-test runner for Python.
+`Tox <http://tox.readthedocs.io>`_ is a sort of meta-test runner for Python.
 It installs a project into one or more virtualenvs (usually one for each Python
 version supported), build and installs the project into each virtualenv, and
 runs the projects tests (or any other build processes one might want to test).
@@ -636,7 +636,7 @@ Testing warnings
 ----------------
 
 In order to test that warnings are triggered as expected in certain
-situations, you can use the ``astropy.tests.helper.catch_warnings``
+situations, you can use the `astropy.tests.helper.catch_warnings`
 context manager.  Unlike the `warnings.catch_warnings` context manager
 in the standard library, this one will reset all warning state before
 hand so one is assured to get the warnings reported, regardless of
@@ -659,7 +659,7 @@ a real-world example::
    function argument to test that warnings are triggered.  This method has
    been found to be problematic in at least one case (`pull request 1174
    <https://github.com/astropy/astropy/pull/1174#issuecomment-20249309>`_)
-   so the ``astropy.tests.helper.catch_warnings`` context manager is
+   so the `astropy.tests.helper.catch_warnings` context manager is
    preferred.
 
 Testing configuration parameters
@@ -670,7 +670,7 @@ are reset to their default values when the test runner starts up.
 
 Sometimes you'll want to test the behavior of code when a certain
 configuration item is set to a particular value.  In that case, you
-can use the ``~astropy.config.ConfigItem.set_temp`` context manager to
+can use the `astropy.config.ConfigItem.set_temp` context manager to
 temporarily set a configuration item to that value, test within that
 context, and have it automatically return to its original value.
 
@@ -870,6 +870,22 @@ traceback is skipped in the example output--only the first and last lines
 of the output are checked.  See the :mod:`doctest` documentation for
 more examples of skipping output.
 
+Ignoring all output
+^^^^^^^^^^^^^^^^^^^
+
+Another possibility for ignoring output is to use the
+``# doctest: +IGNORE_OUTPUT`` flag.  This allows a doctest to execute (and
+check that the code executes without errors), but allows the entire output
+to be ignored in cases where we don't care what the output is.  This differs
+from using ellipses in that we can still provide complete example output, just
+without the test checking that it is exactly right.  For example::
+
+    >>> print('Hello world')  # doctest: +IGNORE_OUTPUT
+    We don't really care what the output is as long as there were no errors...
+
+Similarly the ``IGNORE_OUTPUT_2`` and ``IGNORE_OUTPUT_3`` flags can be used
+to ignore output only on Python 2 or only on Python 3 respectively.
+
 
 Handling float output
 ---------------------
@@ -895,3 +911,25 @@ Python `float` objects and compared numerically.  This means that small
 differences in representation of roundoff digits will be ignored by the
 doctest.  The values are otherwise compared exactly, so more significant
 (albeit possibly small) differences will still be caught by these tests.
+
+
+Continuous integration
+----------------------
+
+Astropy uses `Travis <https://travis-ci.org/astropy/astropy>`_ for continuous
+integration (CI) on Linux and OSX setups, and `Appveyor
+<https://ci.appveyor.com/project/Astropy/astropy>`_ on Windows. These
+continuously test the package for each commit and pull request that is pushed
+to GitHub to notice when something breaks.
+
+Astropy and many affiliated packages use an external package called
+`ci-helpers <https://github.com/astropy/astropy-helpers>`_ to provide
+support for the generic parts of the CI systems. ``ci-helpers`` consists of
+a set of scripts that are used by the ``.travis.yml`` and ``appveyor.yml``
+files to setting up the conda environment, and installing dependencies.
+
+Dependencies can be customized for different packages using the appropriate
+environmental variables in ``.travis.yml`` and ``appveyor.yml``. For more
+details on how to set up this machinery, see the `package-template
+<https://github.com/astropy/package-template>`_ and `ci-helpers`_.
+

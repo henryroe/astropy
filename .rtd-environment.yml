@@ -1,0 +1,16 @@
+name: astropy
+
+channels:
+  - astropy
+
+dependencies:
+  - astropy-helpers
+  - numpy
+  - cython
+  - matplotlib
+  - wcsaxes
+  - scipy
+  - pillow
+  - pip:
+    - sphinx-gallery
+    - jplephem

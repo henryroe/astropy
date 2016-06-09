@@ -4,30 +4,24 @@
 
 from __future__ import (absolute_import, unicode_literals, division,
                         print_function)
-
-import inspect
-
+import warnings
 import numpy as np
-
 from .core import (Fittable1DModel, Fittable2DModel, Model,
                    ModelDefinitionError, custom_model)
 from .parameters import Parameter, InputParameterError
 from .utils import ellipse_extent
 from ..utils import deprecated
-from ..utils.compat.funcsigs import signature
 from ..extern import six
-
 from .utils import get_inputs_and_params
+from ..utils.exceptions import AstropyDeprecationWarning
 
 
-__all__ = sorted([
-    'AiryDisk2D', 'Moffat1D', 'Moffat2D', 'Box1D',
-    'Box2D', 'Const1D', 'Const2D', 'Ellipse2D', 'Disk2D',
-    'Gaussian1D', 'GaussianAbsorption1D', 'Gaussian2D', 'Linear1D',
-    'Lorentz1D', 'MexicanHat1D', 'MexicanHat2D', 'Redshift', 'Scale',
-    'Sersic1D', 'Sersic2D', 'Shift', 'Sine1D', 'Trapezoid1D', 'TrapezoidDisk2D',
-    'Ring2D', 'custom_model_1d', 'Voigt1D'
-])
+__all__ = ['AiryDisk2D', 'Moffat1D', 'Moffat2D', 'Box1D', 'Box2D', 'Const1D',
+           'Const2D', 'Ellipse2D', 'Disk2D', 'Gaussian1D',
+           'GaussianAbsorption1D', 'Gaussian2D', 'Linear1D', 'Lorentz1D',
+           'MexicanHat1D', 'MexicanHat2D', 'RedshiftScaleFactor', 'Redshift',
+           'Scale', 'Sersic1D', 'Sersic2D', 'Shift', 'Sine1D', 'Trapezoid1D',
+           'TrapezoidDisk2D', 'Ring2D', 'Voigt1D']
 
 
 class Gaussian1D(Fittable1DModel):
@@ -88,6 +82,25 @@ class Gaussian1D(Fittable1DModel):
     >>> g1.stddev.fixed
     True
 
+    .. plot::
+        :include-source:
+
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        from astropy.modeling.models import Gaussian1D
+
+        plt.figure()
+        s1 = Gaussian1D()
+        r = np.arange(-5, 5, .01)
+
+        for factor in range(1, 4):
+            s1.amplitude = factor
+            plt.plot(r, s1(r), color=str(0.25 * factor), lw=2)
+
+        plt.axis([-5, 5, -1, 4])
+        plt.show()
+
     See Also
     --------
     Gaussian2D, Box1D, Moffat1D, Lorentz1D
@@ -96,9 +109,8 @@ class Gaussian1D(Fittable1DModel):
     amplitude = Parameter(default=1)
     mean = Parameter(default=0)
     stddev = Parameter(default=1)
-    _bounding_box = 'auto'
 
-    def bounding_box_default(self, factor=5.5):
+    def bounding_box(self, factor=5.5):
         """
         Tuple defining the default ``bounding_box`` limits,
         ``(x_low, x_high)``
@@ -107,7 +119,7 @@ class Gaussian1D(Fittable1DModel):
         ----------
         factor : float
             The multiple of `stddev` used to define the limits.
-            The default is 5.5-sigma, corresponding to a relative error < 1e-7.
+            The default is 5.5, corresponding to a relative error < 1e-7.
 
         Examples
         --------
@@ -116,10 +128,11 @@ class Gaussian1D(Fittable1DModel):
         >>> model.bounding_box
         (-11.0, 11.0)
 
-        This range can be set directly (see: `astropy.modeling.Model.bounding_box`) or by
-        using a different factor, like:
+        This range can be set directly (see: `Model.bounding_box
+        <astropy.modeling.Model.bounding_box>`) or by using a different factor,
+        like:
 
-        >>> model.bounding_box = model.bounding_box_default(factor=2)
+        >>> model.bounding_box = model.bounding_box(factor=2)
         >>> model.bounding_box
         (-4.0, 4.0)
         """
@@ -168,6 +181,25 @@ class GaussianAbsorption1D(Fittable1DModel):
 
         .. math:: f(x) = 1 - A e^{- \\frac{\\left(x - x_{0}\\right)^{2}}{2 \\sigma^{2}}}
 
+    Examples
+    --------
+    .. plot::
+        :include-source:
+
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from astropy.modeling.models import GaussianAbsorption1D
+
+        plt.figure()
+        s1 = GaussianAbsorption1D()
+        r = np.arange(-5, 5, .01)
+        for factor in range(1, 4):
+            s1.amplitude = factor
+            plt.plot(r, s1(r), color=str(0.25 * factor), lw=2)
+
+        plt.axis([-5, 5, -3, 2])
+        plt.show()
+
     See Also
     --------
     Gaussian1D
@@ -176,6 +208,37 @@ class GaussianAbsorption1D(Fittable1DModel):
     amplitude = Parameter(default=1)
     mean = Parameter(default=0)
     stddev = Parameter(default=1)
+
+    def bounding_box(self, factor=5.5):
+        """
+        Tuple defining the default ``bounding_box`` limits,
+        ``(x_low, x_high)``
+
+        Parameters
+        ----------
+        factor : float
+            The multiple of `stddev` used to define the limits.
+            The default is 5.5, corresponding to a relative error < 1e-7.
+
+        Examples
+        --------
+        >>> from astropy.modeling.models import Gaussian1D
+        >>> model = Gaussian1D(mean=0, stddev=2)
+        >>> model.bounding_box
+        (-11.0, 11.0)
+
+        This range can be set directly (see: ``help(model.bounding_box)``) or by
+        using a different factor, like:
+
+        >>> model.bounding_box = model.bounding_box(factor=2)
+        >>> model.bounding_box
+        (-4.0, 4.0)
+        """
+
+        x0 = self.mean.value
+        dx = factor * self.stddev
+
+        return (x0 - dx, x0 + dx)
 
     @staticmethod
     def evaluate(x, amplitude, mean, stddev):
@@ -216,7 +279,7 @@ class Gaussian2D(Fittable2DModel):
         matrix (``cov_matrix``) is input.
     theta : float, optional
         Rotation angle in radians. The rotation angle increases
-        counterclockwise, from the positive x-axis.
+        counterclockwise.
     cov_matrix : ndarray, optional
         A 2x2 covariance matrix. If specified, overrides the ``x_stddev``,
         ``y_stddev``, and ``theta`` specification.
@@ -277,7 +340,6 @@ class Gaussian2D(Fittable2DModel):
     x_stddev = Parameter(default=1)
     y_stddev = Parameter(default=1)
     theta = Parameter(default=0)
-    _bounding_box = 'auto'
 
     def __init__(self, amplitude=amplitude.default, x_mean=x_mean.default,
                  y_mean=y_mean.default, x_stddev=None, y_stddev=None,
@@ -319,7 +381,7 @@ class Gaussian2D(Fittable2DModel):
             amplitude=amplitude, x_mean=x_mean, y_mean=y_mean,
             x_stddev=x_stddev, y_stddev=y_stddev, theta=theta, **kwargs)
 
-    def bounding_box_default(self, factor=5.5):
+    def bounding_box(self, factor=5.5):
         """
         Tuple defining the default ``bounding_box`` limits in each dimension,
         ``((y_low, y_high), (x_low, x_high))``
@@ -340,10 +402,11 @@ class Gaussian2D(Fittable2DModel):
         >>> model.bounding_box
         ((-11.0, 11.0), (-5.5, 5.5))
 
-        This range can be set directly (see: `astropy.modeling.Model.bounding_box`) or by
-        using a different factor like:
+        This range can be set directly (see: `Model.bounding_box
+        <astropy.modeling.Model.bounding_box>`) or by using a different factor
+        like:
 
-        >>> model.bounding_box = model.bounding_box_default(factor=2)
+        >>> model.bounding_box = model.bounding_box(factor=2)
         >>> model.bounding_box
         ((-4.0, 4.0), (-2.0, 2.0))
         """
@@ -435,6 +498,7 @@ class Shift(Model):
     outputs = ('x',)
 
     offset = Parameter(default=0)
+    fittable = True
 
     @property
     def inverse(self):
@@ -462,6 +526,7 @@ class Scale(Model):
 
     factor = Parameter(default=1)
     linear = True
+    fittable = True
 
     @property
     def inverse(self):
@@ -474,44 +539,53 @@ class Scale(Model):
         return factor * x
 
 
-class Redshift(Fittable1DModel):
+class RedshiftScaleFactor(Fittable1DModel):
     """
-    One dimensional redshift model.
+    One dimensional redshift scale factor model.
 
     Parameters
     ----------
-    z : float or a list of floats
-        Redshift value(s).
+    z : float
+        Redshift value.
 
     Notes
     -----
     Model formula:
 
-        .. math:: \\lambda_{obs} = (1 + z) \\lambda_{rest}
-
+        .. math:: f(x) = x (1 + z)
     """
 
     z = Parameter(description='redshift', default=0)
 
     @staticmethod
     def evaluate(x, z):
-        """One dimensional Redshift model function"""
+        """One dimensional RedshiftScaleFactor model function"""
 
         return (1 + z) * x
 
     @staticmethod
     def fit_deriv(x, z):
-        """One dimensional Redshift model derivative"""
+        """One dimensional RedshiftScaleFactor model derivative"""
+
         d_z = x
         return [d_z]
 
     @property
     def inverse(self):
-        """Inverse Redshift model"""
+        """Inverse RedshiftScaleFactor model"""
 
         inv = self.copy()
         inv.z = 1.0 / (1.0 + self.z) - 1.0
         return inv
+
+
+class Redshift(RedshiftScaleFactor):
+    """This is **deprecated**, use :class:`RedshiftScaleFactor`."""
+    def __init__(self, *args):
+        warnings.warn('The "Redshift" class is now deprecated -- use the '
+                      '"RedshiftScaleFactor" class instead.',
+                      AstropyDeprecationWarning)
+        super(Redshift, self).__init__(*args)
 
 
 class Sersic1D(Fittable1DModel):
@@ -583,21 +657,19 @@ class Sersic1D(Fittable1DModel):
     n = Parameter(default=4)
     _gammaincinv = None
 
-    def __init__(self, amplitude=amplitude.default, r_eff=r_eff.default,
-                 n=n.default, **kwargs):
-        try:
-            from scipy.special import gammaincinv
-            self.__class__._gammaincinv = gammaincinv
-        except ValueError:
-            raise ImportError("Sersic1D model requires scipy > 0.11.")
-
-        super(Sersic1D, self).__init__(
-            amplitude=amplitude, r_eff=r_eff, n=n, **kwargs)
-
     @classmethod
     def evaluate(cls, r, amplitude, r_eff, n):
         """One dimensional Sersic profile function."""
-        return amplitude * np.exp(-cls._gammaincinv(2 * n, 0.5) * ((r / r_eff) ** (1 / n) - 1))
+
+        if cls._gammaincinv is None:
+            try:
+                from scipy.special import gammaincinv
+                cls._gammaincinv = gammaincinv
+            except ValueError:
+                raise ImportError('Sersic1D model requires scipy > 0.11.')
+
+        return (amplitude * np.exp(
+            -cls._gammaincinv(2 * n, 0.5) * ((r / r_eff) ** (1 / n) - 1)))
 
 
 class Sine1D(Fittable1DModel):
@@ -611,7 +683,7 @@ class Sine1D(Fittable1DModel):
     frequency : float
         Oscillation frequency
     phase : float
-        Osciallation phase
+        Oscillation phase
 
     See Also
     --------
@@ -623,6 +695,27 @@ class Sine1D(Fittable1DModel):
     Model formula:
 
         .. math:: f(x) = A \\sin(2 \\pi f x + 2 \\pi p)
+
+    Examples
+    --------
+    .. plot::
+        :include-source:
+
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        from astropy.modeling.models import Sine1D
+
+        plt.figure()
+        s1 = Sine1D(amplitude=1, frequency=.25)
+        r=np.arange(0, 10, .01)
+
+        for amplitude in range(1,4):
+             s1.amplitude = amplitude
+             plt.plot(r, s1(r), color=str(0.25 * amplitude), lw=2)
+
+        plt.axis([0, 10, -5, 5])
+        plt.show()
     """
 
     amplitude = Parameter(default=1)
@@ -688,6 +781,12 @@ class Linear1D(Fittable1DModel):
         d_intercept = np.ones_like(x)
         return [d_slope, d_intercept]
 
+    @property
+    def inverse(self):
+        new_slope = self.slope ** -1
+        new_intercept = -self.intercept / self.slope
+        return self.__class__(slope=new_slope, intercept=new_intercept)
+
 
 class Lorentz1D(Fittable1DModel):
     """
@@ -713,6 +812,27 @@ class Lorentz1D(Fittable1DModel):
     .. math::
 
         f(x) = \\frac{A \\gamma^{2}}{\\gamma^{2} + \\left(x - x_{0}\\right)^{2}}
+
+    Examples
+    --------
+    .. plot::
+        :include-source:
+
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        from astropy.modeling.models import Lorentz1D
+
+        plt.figure()
+        s1 = Lorentz1D()
+        r = np.arange(-5, 5, .01)
+
+        for factor in range(1, 4):
+            s1.amplitude = factor
+            plt.plot(r, s1(r), color=str(0.25 * factor), lw=2)
+
+        plt.axis([-5, 5, -1, 4])
+        plt.show()
     """
 
     amplitude = Parameter(default=1)
@@ -847,6 +967,27 @@ class Const1D(Fittable1DModel):
     Model formula:
 
         .. math:: f(x) = A
+
+    Examples
+    --------
+    .. plot::
+        :include-source:
+
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        from astropy.modeling.models import Const1D
+
+        plt.figure()
+        s1 = Const1D()
+        r = np.arange(-5, 5, .01)
+
+        for factor in range(1, 4):
+            s1.amplitude = factor
+            plt.plot(r, s1(r), color=str(0.25 * factor), lw=2)
+
+        plt.axis([-5, 5, -1, 4])
+        plt.show()
     """
 
     amplitude = Parameter(default=1)
@@ -990,26 +1131,6 @@ class Ellipse2D(Fittable2DModel):
     a = Parameter(default=1)
     b = Parameter(default=1)
     theta = Parameter(default=0)
-    _bounding_box = 'auto'
-
-    def bounding_box_default(self):
-        """
-        Tuple defining the default ``bounding_box`` limits around the ellipse.
-
-        ``((y_low, y_high), (x_low, x_high))``
-
-        References
-        ----------
-        `astropy.modeling.Model.bounding_box`
-        """
-
-        a = self.a
-        b = self.b
-        theta = self.theta.value
-        dx, dy = ellipse_extent(a, b, theta)
-
-        return ((self.y_0 - dy, self.y_0 + dy),
-                (self.x_0 - dx, self.x_0 + dx))
 
     @staticmethod
     def evaluate(x, y, amplitude, x_0, y_0, a, b, theta):
@@ -1023,6 +1144,22 @@ class Ellipse2D(Fittable2DModel):
         numerator2 = -(xx * sint) + (yy * cost)
         in_ellipse = (((numerator1 / a) ** 2 + (numerator2 / b) ** 2) <= 1.)
         return np.select([in_ellipse], [amplitude])
+
+    @property
+    def bounding_box(self):
+        """
+        Tuple defining the default ``bounding_box`` limits.
+
+        ``((y_low, y_high), (x_low, x_high))``
+        """
+
+        a = self.a
+        b = self.b
+        theta = self.theta.value
+        dx, dy = ellipse_extent(a, b, theta)
+
+        return ((self.y_0 - dy, self.y_0 + dy),
+                (self.x_0 - dx, self.x_0 + dx))
 
 
 class Disk2D(Fittable2DModel):
@@ -1069,6 +1206,17 @@ class Disk2D(Fittable2DModel):
 
         rr = (x - x_0) ** 2 + (y - y_0) ** 2
         return np.select([rr <= R_0 ** 2], [amplitude])
+
+    @property
+    def bounding_box(self):
+        """
+        Tuple defining the default ``bounding_box`` limits.
+
+        ``((y_low, y_high), (x_low, x_high))``
+        """
+
+        return ((self.y_0 - self.R_0, self.y_0 + self.R_0),
+                (self.x_0 - self.R_0, self.x_0 + self.R_0))
 
 
 class Ring2D(Fittable2DModel):
@@ -1139,6 +1287,19 @@ class Ring2D(Fittable2DModel):
         r_range = np.logical_and(rr >= r_in ** 2, rr <= (r_in + width) ** 2)
         return np.select([r_range], [amplitude])
 
+    @property
+    def bounding_box(self):
+        """
+        Tuple defining the default ``bounding_box``.
+
+        ``((y_low, y_high), (x_low, x_high))``
+        """
+
+        dr = self.r_in + self.width
+
+        return ((self.y_0 - dr, self.y_0 + dr),
+                (self.x_0 - dr, self.x_0 + dr))
+
 
 class Delta1D(Fittable1DModel):
     """One dimensional Dirac delta function."""
@@ -1183,6 +1344,28 @@ class Box1D(Fittable1DModel):
                        0 & : \\textnormal{else}
                      \\end{array}
                    \\right.
+
+    Examples
+    --------
+    .. plot::
+        :include-source:
+
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        from astropy.modeling.models import Box1D
+
+        plt.figure()
+        s1 = Box1D()
+        r = np.arange(-5, 5, .01)
+
+        for factor in range(1, 4):
+            s1.amplitude = factor
+            s1.width = factor
+            plt.plot(r, s1(r), color=str(0.25 * factor), lw=2)
+
+        plt.axis([-5, 5, -1, 4])
+        plt.show()
     """
 
     amplitude = Parameter(default=1)
@@ -1205,6 +1388,18 @@ class Box1D(Fittable1DModel):
         d_x_0 = np.zeros_like(x)
         d_width = np.zeros_like(x)
         return [d_amplitude, d_x_0, d_width]
+
+    @property
+    def bounding_box(self):
+        """
+        Tuple defining the default ``bounding_box`` limits.
+
+        ``(x_low, x_high))``
+        """
+
+        dx = self.width / 2
+
+        return (self.x_0 - dx, self.x_0 + dx)
 
 
 class Box2D(Fittable2DModel):
@@ -1260,6 +1455,20 @@ class Box2D(Fittable2DModel):
                                  y <= y_0 + y_width / 2.)
         return np.select([np.logical_and(x_range, y_range)], [amplitude], 0)
 
+    @property
+    def bounding_box(self):
+        """
+        Tuple defining the default ``bounding_box``.
+
+        ``((y_low, y_high), (x_low, x_high))``
+        """
+
+        dx = self.x_width / 2
+        dy = self.y_width / 2
+
+        return ((self.y_0 - dy, self.y_0 + dy),
+                (self.x_0 - dx, self.x_0 + dx))
+
 
 class Trapezoid1D(Fittable1DModel):
     """
@@ -1279,6 +1488,28 @@ class Trapezoid1D(Fittable1DModel):
     See Also
     --------
     Box1D, Gaussian1D, Moffat1D
+
+    Examples
+    --------
+    .. plot::
+        :include-source:
+
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        from astropy.modeling.models import Trapezoid1D
+
+        plt.figure()
+        s1 = Trapezoid1D()
+        r = np.arange(-5, 5, .01)
+
+        for factor in range(1, 4):
+            s1.amplitude = factor
+            s1.width = factor
+            plt.plot(r, s1(r), color=str(0.25 * factor), lw=2)
+
+        plt.axis([-5, 5, -1, 4])
+        plt.show()
     """
 
     amplitude = Parameter(default=1)
@@ -1305,6 +1536,18 @@ class Trapezoid1D(Fittable1DModel):
         val_b = amplitude
         val_c = slope * (x4 - x)
         return np.select([range_a, range_b, range_c], [val_a, val_b, val_c])
+
+    @property
+    def bounding_box(self):
+        """
+        Tuple defining the default ``bounding_box`` limits.
+
+        ``(x_low, x_high))``
+        """
+
+        dx = self.width / 2 + self.amplitude / self.slope
+
+        return (self.x_0 - dx, self.x_0 + dx)
 
 
 class TrapezoidDisk2D(Fittable2DModel):
@@ -1346,6 +1589,19 @@ class TrapezoidDisk2D(Fittable2DModel):
         val_2 = amplitude + slope * (R_0 - r)
         return np.select([range_1, range_2], [val_1, val_2])
 
+    @property
+    def bounding_box(self):
+        """
+        Tuple defining the default ``bounding_box``.
+
+        ``((y_low, y_high), (x_low, x_high))``
+        """
+
+        dr = self.R_0 + self.amplitude / self.slope
+
+        return ((self.y_0 - dr, self.y_0 + dr),
+                (self.x_0 - dr, self.x_0 + dr))
+
 
 class MexicanHat1D(Fittable1DModel):
     """
@@ -1373,6 +1629,27 @@ class MexicanHat1D(Fittable1DModel):
         f(x) = {A \\left(1 - \\frac{\\left(x - x_{0}\\right)^{2}}{\\sigma^{2}}\\right)
         e^{- \\frac{\\left(x - x_{0}\\right)^{2}}{2 \\sigma^{2}}}}
 
+    Examples
+    --------
+    .. plot::
+        :include-source:
+
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        from astropy.modeling.models import MexicanHat1D
+
+        plt.figure()
+        s1 = MexicanHat1D()
+        r = np.arange(-5, 5, .01)
+
+        for factor in range(1, 4):
+            s1.amplitude = factor
+            s1.width = factor
+            plt.plot(r, s1(r), color=str(0.25 * factor), lw=2)
+
+        plt.axis([-5, 5, -2, 4])
+        plt.show()
     """
 
     amplitude = Parameter(default=1)
@@ -1478,38 +1755,20 @@ class AiryDisk2D(Fittable2DModel):
     x_0 = Parameter(default=0)
     y_0 = Parameter(default=0)
     radius = Parameter(default=1)
+    _rz = None
     _j1 = None
-
-    def __init__(self, amplitude=amplitude.default, x_0=x_0.default,
-                 y_0=y_0.default, radius=radius.default, **kwargs):
-        if self._j1 is None:
-            try:
-                from scipy.special import j1, jn_zeros
-                self.__class__._j1 = j1
-                self.__class__._rz = jn_zeros(1, 1)[0] / np.pi
-            # add a ValueError here for python3 + scipy < 0.12
-            except ValueError:
-                raise ImportError("AiryDisk2D model requires scipy > 0.11.")
-
-        super(AiryDisk2D, self).__init__(
-            amplitude=amplitude, x_0=x_0, y_0=y_0, radius=radius, **kwargs)
-
-    # TODO: Why does this particular model have its own special __deepcopy__
-    # and __copy__?  If it has anything to do with the use of the j_1 function
-    # that should be reworked.
-    def __deepcopy__(self, memo):
-        new_model = self.__class__(self.amplitude.value, self.x_0.value,
-                                   self.y_0.value, self.radius.value)
-        return new_model
-
-    def __copy__(self):
-        new_model = self.__class__(self.amplitude.value, self.x_0.value,
-                                   self.y_0.value, self.radius.value)
-        return new_model
 
     @classmethod
     def evaluate(cls, x, y, amplitude, x_0, y_0, radius):
         """Two dimensional Airy model function"""
+
+        if cls._rz is None:
+            try:
+                from scipy.special import j1, jn_zeros
+                cls._rz = jn_zeros(1, 1)[0] / np.pi
+                cls._j1 = j1
+            except ValueError:
+                raise ImportError('AiryDisk2D model requires scipy > 0.11.')
 
         r = np.sqrt((x - x_0) ** 2 + (y - y_0) ** 2) / (radius / cls._rz)
         # Since r can be zero, we have to take care to treat that case
@@ -1547,6 +1806,28 @@ class Moffat1D(Fittable1DModel):
     .. math::
 
         f(x) = A \\left(1 + \\frac{\\left(x - x_{0}\\right)^{2}}{\\gamma^{2}}\\right)^{- \\alpha}
+
+    Examples
+    --------
+    .. plot::
+        :include-source:
+
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        from astropy.modeling.models import Moffat1D
+
+        plt.figure()
+        s1 = Moffat1D()
+        r = np.arange(-5, 5, .01)
+
+        for factor in range(1, 4):
+            s1.amplitude = factor
+            s1.width = factor
+            plt.plot(r, s1(r), color=str(0.25 * factor), lw=2)
+
+        plt.axis([-5, 5, -1, 4])
+        plt.show()
     """
 
     amplitude = Parameter(default=1)
@@ -1714,22 +1995,16 @@ class Sersic2D(Fittable2DModel):
     theta = Parameter(default=0)
     _gammaincinv = None
 
-    def __init__(self, amplitude=amplitude.default, r_eff=r_eff.default,
-                 n=n.default, x_0=x_0.default, y_0=y_0.default, ellip=ellip.default,
-                 theta=theta.default, **kwargs):
-        try:
-            from scipy.special import gammaincinv
-            self.__class__._gammaincinv = gammaincinv
-        except ValueError:
-            raise ImportError("Sersic2D model requires scipy > 0.11.")
-
-        super(Sersic2D, self).__init__(
-            amplitude=amplitude, r_eff=r_eff, n=n, x_0=x_0, y_0=y_0,
-            ellip=ellip, theta=theta, **kwargs)
-
     @classmethod
     def evaluate(cls, x, y, amplitude, r_eff, n, x_0, y_0, ellip, theta):
         """Two dimensional Sersic profile function."""
+
+        if cls._gammaincinv is None:
+            try:
+                from scipy.special import gammaincinv
+                cls._gammaincinv = gammaincinv
+            except ValueError:
+                raise ImportError('Sersic2D model requires scipy > 0.11.')
 
         bn = cls._gammaincinv(2. * n, 0.5)
         a, b = r_eff, (1 - ellip) * r_eff
@@ -1739,15 +2014,3 @@ class Sersic2D(Fittable2DModel):
         z = np.sqrt((x_maj / a) ** 2 + (x_min / b) ** 2)
 
         return amplitude * np.exp(-bn * (z ** (1 / n) - 1))
-
-
-@deprecated('1.0', alternative='astropy.modeling.models.custom_model',
-            pending=True)
-def custom_model_1d(func, func_fit_deriv=None):
-    inputs, params = get_inputs_and_params(func)
-
-    if len(inputs) != 1:
-        raise ModelDefinitionError(
-            "All parameters must be keyword arguments")
-
-    return custom_model(func, fit_deriv=func_fit_deriv)

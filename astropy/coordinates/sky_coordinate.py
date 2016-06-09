@@ -12,12 +12,13 @@ from ..extern.six.moves import zip
 from ..units import Unit, IrreducibleUnit
 from .. import units as u
 from ..wcs.utils import skycoord_to_pixel, pixel_to_skycoord
-from ..utils.exceptions import AstropyDeprecationWarning
+from ..utils.exceptions import AstropyDeprecationWarning, AstropyWarning
 from ..utils.data_info import MixinInfo
 
 from .distances import Distance
+from .angles import Angle
 from .baseframe import BaseCoordinateFrame, frame_transform_graph, GenericFrame, _get_repr_cls
-from .builtin_frames import ICRS
+from .builtin_frames import ICRS, SkyOffsetFrame
 from .representation import (BaseRepresentation, SphericalRepresentation,
                              UnitSphericalRepresentation)
 
@@ -49,6 +50,7 @@ class SkyCoordInfo(MixinInfo):
     be used as a general way to store meta information.
     """
     attrs_from_parent = set(['unit'])  # Unit is read-only
+    _supports_indexing = False
 
     @staticmethod
     def default_format(val):
@@ -158,6 +160,9 @@ class SkyCoord(object):
         Specifies the representation, e.g. 'spherical', 'cartesian', or
         'cylindrical'.  This affects the positional args and other keyword args
         which must correspond to the given representation.
+    copy: bool, optional
+        If `True` (default), a copy of any coordinate data is made.  This
+        argument can only be passed in as a keyword argument.
     **keyword_args
         Other keyword arguments as applicable for user-defined coordinate frames.
         Common options include:
@@ -187,6 +192,7 @@ class SkyCoord(object):
         # kwargs dict for initializing attributes for this object and for
         # creating the internal self._sky_coord_frame object
         args = list(args)  # Make it mutable
+        copy = kwargs.pop('copy', True)
         kwargs = self._parse_inputs(args, kwargs)
 
         # Set internal versions of object state attributes
@@ -203,7 +209,7 @@ class SkyCoord(object):
                 coord_kwargs[attr] = value
 
         # Finally make the internal coordinate object.
-        self._sky_coord_frame = frame.__class__(**coord_kwargs)
+        self._sky_coord_frame = frame.__class__(copy=copy, **coord_kwargs)
 
         if not self._sky_coord_frame.has_data:
             raise ValueError('Cannot create a SkyCoord without data')
@@ -418,7 +424,17 @@ class SkyCoord(object):
                 if attr in self.frame.get_frame_attr_names():
                     return getattr(self.frame, attr)
                 else:
-                    return getattr(self, '_' + attr)
+                    try:
+                        return getattr(self, '_' + attr)
+                    except AttributeError:
+                        # this can happen because FRAME_ATTR_NAMES_SET is
+                        # dynamic.  So if a frame is added to the transform
+                        # graph after this SkyCoord was created, the "real"
+                        # underlying attribute - e.g. `_equinox` does not exist
+                        # on the SkyCoord.  So we add this case to just use
+                        # None, as it wouldn't have been possible for the user
+                        # to have set the value until the frame existed anyway
+                        return None
 
             # Some attributes might not fall in the above category but still
             # are available through self._sky_coord_frame.
@@ -673,10 +689,10 @@ class SkyCoord(object):
             raise TypeError('Can only get separation to another SkyCoord or a '
                             'coordinate frame with data')
 
-        if self.data.__class__ == UnitSphericalRepresentation:
+        if issubclass(self.data.__class__, UnitSphericalRepresentation):
             raise ValueError('This object does not have a distance; cannot '
                              'compute 3d separation.')
-        if other.data.__class__ == UnitSphericalRepresentation:
+        if issubclass(other.data.__class__, UnitSphericalRepresentation):
             raise ValueError('The other object does not have a distance; '
                              'cannot compute 3d separation.')
 
@@ -686,6 +702,53 @@ class SkyCoord(object):
 
         distval = (dx.value ** 2 + dy.value ** 2 + dz.value ** 2) ** 0.5
         return Distance(distval, dx.unit)
+
+    def spherical_offsets_to(self, tocoord):
+        r"""
+        Computes angular offsets to go *from* this coordinate *to* another.
+
+        Parameters
+        ----------
+        tocoord : `~astropy.coordinates.BaseCoordinateFrame`
+            The coordinate to offset to.
+
+        Returns
+        -------
+        lon_offset : `~astropy.coordinates.Angle`
+            The angular offset in the longitude direction (i.e., RA for
+            equatorial coordinates).
+        lat_offset : `~astropy.coordinates.Angle`
+            The angular offset in the latitude direction (i.e., Dec for
+            equatorial coordinates).
+
+        Raises
+        ------
+        ValueError
+            If the ``tocoord`` is not in the same frame as this one. This is
+            different from the behavior of the `separation`/`separation_3d`
+            methods because the offset components depend critically on the
+            specific choice of frame.
+
+        Notes
+        -----
+        This uses the sky offset frame machinery, and hence will produce a new
+        sky offset frame if one does not already exist for this object's frame
+        class.
+
+        See Also
+        --------
+        separation : for the *total* angular offset (not broken out into components)
+
+        """
+        if not self.is_equivalent_frame(tocoord):
+            raise ValueError('Tried to use spherical_offsets_to with two non-matching frames!')
+
+        aframe = self.skyoffset_frame()
+        acoord = tocoord.transform_to(aframe)
+
+        dlon = acoord.spherical.lon.view(Angle)
+        dlat = acoord.spherical.lat.view(Angle)
+        return dlon, dlat
 
     def match_to_catalog_sky(self, catalogcoord, nthneighbor=1):
         """
@@ -973,6 +1036,24 @@ class SkyCoord(object):
         olon = other_in_self_frame.represent_as(UnitSphericalRepresentation).lon
 
         return angle_utilities.position_angle(slon, slat, olon, olat)
+
+    def skyoffset_frame(self, rotation=None):
+        """
+        Returns the sky offset frame with this `SkyCoord` at the origin.
+
+        Returns
+        -------
+        astrframe : `~astropy.coordinates.SkyOffsetFrame`
+            A sky offset frame of the same type as this `SkyCoord` (e.g., if
+            this object has an ICRS coordinate, the resulting frame is
+            SkyOffsetICRS, with the origin set to this object)
+        rotation : `~astropy.coordinates.Angle` or `~astropy.units.Quantity` with angle units
+            The final rotation of the frame about the ``origin``. The sign of
+            the rotation is the left-hand rule. That is, an object at a
+            particular position angle in the un-rotated system will be sent to
+            the positive latitude (z) direction in the final frame.
+        """
+        return SkyOffsetFrame(origin=self, rotation=rotation)
 
     def get_constellation(self, short_name=False, constellation_list='iau'):
         """
@@ -1405,8 +1486,8 @@ def _parse_coordinate_arg(coords, frame, units, init_kwargs):
             allunitsphrepr = True
             for sc in scs[1:]:
                 if not sc.is_equivalent_frame(scs[0]):
-                        raise ValueError("List of inputs don't have equivalent "
-                                         "frames: {0} != {1}".format(sc, scs[0]))
+                    raise ValueError("List of inputs don't have equivalent "
+                                     "frames: {0} != {1}".format(sc, scs[0]))
                 if allunitsphrepr and not isinstance(sc.data, UnitSphericalRepresentation):
                     allunitsphrepr = False
 
@@ -1479,7 +1560,8 @@ def _parse_coordinate_arg(coords, frame, units, init_kwargs):
     try:
         for frame_attr_name, repr_attr_class, value, unit in zip(
                 frame_attr_names, repr_attr_classes, values, units):
-            valid_kwargs[frame_attr_name] = repr_attr_class(value, unit=unit)
+            valid_kwargs[frame_attr_name] = repr_attr_class(value, unit=unit,
+                                                            copy=False)
     except Exception as err:
         raise ValueError('Cannot parse first argument data "{0}" for attribute '
                          '{1}'.format(value, frame_attr_name), err)

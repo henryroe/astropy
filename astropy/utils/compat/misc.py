@@ -7,11 +7,10 @@ be accessed from there.
 
 Includes the following fixes:
 
-* The `contextlib.ignored` context manager, which is only available in Python
+* The `contextlib.suppress` context manager, which is only available in Python
   3.4 or greater.
 
 """
-
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 from ...extern import six
@@ -19,9 +18,10 @@ from ...extern import six
 import functools
 import sys
 
+from ..decorators import deprecated
 
-__all__ = ['invalidate_caches', 'override__dir__', 'ignored',
-           'possible_filename']
+__all__ = ['invalidate_caches', 'override__dir__', 'suppress',
+           'possible_filename', 'namedtuple_asdict']
 
 
 def possible_filename(filename):
@@ -97,6 +97,7 @@ try:
     from contextlib import ignored
 except ImportError:
     from contextlib import contextmanager
+    @deprecated('1.3', alternative='suppress')
     @contextmanager
     def ignored(*exceptions):
         """A context manager for ignoring exceptions.  Equivalent to::
@@ -113,8 +114,62 @@ except ImportError:
             ...     os.remove('file-that-does-not-exist')
 
         """
-
         try:
             yield
         except exceptions:
             pass
+
+
+try:
+    from contextlib import suppress
+except ImportError:
+    from contextlib import contextmanager
+    @contextmanager
+    def suppress(*exceptions):
+        """A context manager for ignoring exceptions.  Equivalent to::
+
+            try:
+                <body>
+            except exceptions:
+                pass
+
+        Example::
+
+            >>> import os
+            >>> with suppress(OSError):
+            ...     os.remove('file-that-does-not-exist')
+
+        """
+        try:
+            yield
+        except exceptions:
+            pass
+
+
+# For unclear reasons, the `_asdict` method of namedtuple produces an empty
+# dictionary if the namedtuple is a subclass of another namedtuple... But *onlt*
+# in py 3.3.  >3.4 or 2.7 seem to work just fine.  So we provide this for
+# compatibility as long as 3.3 is supported.
+if sys.version_info[:2] == (3, 3):
+    def namedtuple_asdict(namedtuple):
+        """
+        The same as ``namedtuple._adict()``, but fixed to work even when
+        namedtuple is a subclass of another namedtuple
+
+        Parameters
+        ----------
+        namedtuple : collections.namedtuple
+            The named tuple to get the dict of
+        """
+        return {fi:getattr(namedtuple, fi) for fi in namedtuple._fields}
+else:
+    def namedtuple_asdict(namedtuple):
+        """
+        The same as ``namedtuple._adict()``.
+
+        Parameters
+        ----------
+        namedtuple : collections.namedtuple
+            The named tuple to get the dict of
+        """
+        return namedtuple._asdict()

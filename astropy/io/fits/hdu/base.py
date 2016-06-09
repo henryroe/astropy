@@ -14,13 +14,12 @@ from .. import conf
 from ..file import _File
 from ..header import Header, _pad_length
 from ..util import (_is_int, _is_pseudo_unsigned, _unsigned_zero,
-                    itersubclasses, decode_ascii,
-                    _get_array_mmap, _array_to_file, first)
+                    itersubclasses, decode_ascii, _get_array_mmap, first)
 from ..verify import _Verify, _ErrList
 
 from ....extern.six import string_types, add_metaclass
 from ....utils import lazyproperty, deprecated
-from ....utils.compat import ignored
+from ....utils.compat import suppress
 from ....utils.compat.funcsigs import signature, Parameter
 from ....utils.exceptions import AstropyUserWarning
 
@@ -101,16 +100,17 @@ class _BaseHDUMeta(type):
                 def data(self):
                     # The deleter
                     if self._file is not None and self._data_loaded:
+                        data_refcount = sys.getrefcount(self.data)
+                        # Manually delete *now* so that FITS_rec.__del__
+                        # cleanup can happen if applicable
+                        del self.__dict__['data']
                         # Don't even do this unless the *only* reference to the
-                        # .data array is the one we're deleting by deleting
+                        # .data array was the one we're deleting by deleting
                         # this attribute; if any other references to the array
                         # are hanging around (perhaps the user ran ``data =
                         # hdu.data``) don't even consider this:
-                        if sys.getrefcount(self.data) == 2:
-                            # Add 1 to refcount since by the time this deleter
-                            # is called, the data array isn't actually deleted
-                            # *yet*, but will be shortly after
-                            self._file._maybe_close_mmap(refcount_delta=1)
+                        if data_refcount == 2:
+                            self._file._maybe_close_mmap()
 
                 setattr(cls, 'data', data_prop.deleter(data))
 
@@ -230,7 +230,7 @@ class _BaseHDU(object):
             ('XTENSION' in self._header and
              (self._header['XTENSION'] == 'IMAGE' or
               (self._header['XTENSION'] == 'BINTABLE' and
-               'ZIMAGE' in self._header and self._header['ZIMAGE'] == True))))
+               'ZIMAGE' in self._header and self._header['ZIMAGE'] is True))))
 
     @property
     def _data_loaded(self):
@@ -642,13 +642,13 @@ class _BaseHDU(object):
         if (self._has_data and self._standard and
                 _is_pseudo_unsigned(self.data.dtype)):
             for keyword in ('BSCALE', 'BZERO'):
-                with ignored(KeyError):
+                with suppress(KeyError):
                     del self._header[keyword]
 
     def _writeheader(self, fileobj):
         offset = 0
         if not fileobj.simulateonly:
-            with ignored(AttributeError, IOError):
+            with suppress(AttributeError, IOError):
                 offset = fileobj.tell()
 
             self._header.tofile(fileobj)
@@ -727,7 +727,7 @@ class _BaseHDU(object):
 
         raw = self._get_raw_data(self._data_size, 'ubyte', self._data_offset)
         if raw is not None:
-            _array_to_file(raw, fileobj)
+            fileobj.writearray(raw)
             return raw.nbytes
         else:
             return 0
@@ -888,7 +888,7 @@ class _NonstandardHDU(_BaseHDU, _Verify):
         # The check that 'GROUPS' is missing is a bit redundant, since the
         # match_header for GroupsHDU will always be called before this one.
         if card.keyword == 'SIMPLE':
-            if 'GROUPS' not in header and card.value == False:
+            if 'GROUPS' not in header and card.value is False:
                 return True
             else:
                 raise InvalidHDUException

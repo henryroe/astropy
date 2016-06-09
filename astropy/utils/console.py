@@ -26,24 +26,32 @@ except ImportError:
     _CAN_RESIZE_TERMINAL = False
 
 try:
+    from IPython import get_ipython
+except ImportError:
+    pass
+try:
     get_ipython()
 except NameError:
     OutStream = None
     IPythonIOStream = None
 else:
+    from IPython import version_info
+    ipython_major_version = version_info[0]
+
     try:
         from ipykernel.iostream import OutStream
     except ImportError:
         try:
             from IPython.zmq.iostream import OutStream
         except ImportError:
-            try:
-                from IPython.kernel.zmq.iostream import OutStream
-            except ImportError:
+            if ipython_major_version < 4:
+                try:
+                    from IPython.kernel.zmq.iostream import OutStream
+                except ImportError:
+                    OutStream = None
+            else:
                 OutStream = None
 
-    from IPython import version_info
-    ipython_major_version = version_info[0]
 
     if OutStream is not None:
         from IPython.utils import io as ipyio
@@ -63,12 +71,10 @@ else:
         # Just define a dummy class
         class PyreadlineConsole(object): pass
 
-from ..config import ConfigAlias
 from ..extern import six
 from ..extern.six.moves import range
 from .. import conf
 
-from .decorators import deprecated
 from .misc import isiterable
 
 
@@ -76,12 +82,6 @@ __all__ = [
     'isatty', 'color_print', 'human_time', 'human_file_size',
     'ProgressBar', 'Spinner', 'print_code_line', 'ProgressBarOrSpinner',
     'terminal_size']
-
-
-# Only use color by default on Windows if IPython is installed.
-USE_COLOR = ConfigAlias(
-    '0.4', 'USE_COLOR', 'use_color', 'astropy.utils.console', 'astropy')
-
 
 _DEFAULT_ENCODING = 'utf-8'
 
@@ -119,7 +119,7 @@ def _get_stdout(stderr=False):
 
 def isatty(file):
     """
-    Returns `True` if `file` is a tty.
+    Returns `True` if ``file`` is a tty.
 
     Most built-in Python file-like objects have an `isatty` member,
     but some user-defined types may not, so this assumes those are not
@@ -164,6 +164,8 @@ def terminal_size(file=None):
             lines -= 6
         if width > 10:
             width -= 1
+        if lines <= 0 or width <= 0:
+            raise Exception('unable to get terminal size')
         return (lines, width)
     except:
         try:
@@ -437,6 +439,12 @@ def human_file_size(size):
     size : str
         A human-friendly representation of the size of the file
     """
+    if hasattr(size, 'unit'):
+        # Import units only if necessary because the import takes a
+        # significant time [#4649]
+        from .. import units as u
+        size = size.to(u.byte).value
+
     suffixes = ' kMGTPEZY'
     if size == 0:
         num_scale = 0
@@ -487,7 +495,7 @@ class ProgressBar(six.Iterator):
 
         file : writable file-like object, optional
             The file to write the progress bar to.  Defaults to
-            `sys.stdout`.  If `file` is not a tty (as determined by
+            `sys.stdout`.  If ``file`` is not a tty (as determined by
             calling its `isatty` member, if any, or special case hacks
             to detect the IPython console), the progress bar will be
             completely silent.
@@ -622,7 +630,7 @@ class ProgressBar(six.Iterator):
         write(' {0:>4s}/{1:>4s}'.format(
             human_file_size(value),
             self._human_total))
-        write(' ({0:>6s}%)'.format('{0:.2f}'.format(frac * 100.0)))
+        write(' ({:>6.2%})'.format(frac))
         write(prefix)
         if t is not None:
             write(human_time(t))
@@ -652,16 +660,16 @@ class ProgressBar(six.Iterator):
             self._widget.value = 0
 
         # Calculate percent completion, and update progress bar
-        percent = (value/self._total) * 100
-        self._widget.value = percent
-        self._widget.description =' ({0:>6s}%)'.format('{0:.2f}'.format(percent))
+        frac = (value/self._total)
+        self._widget.value = frac * 100
+        self._widget.description =' ({:>6.2%})'.format(frac)
 
 
     def _silent_update(self, value=None):
         pass
 
     @classmethod
-    def map(cls, function, items, multiprocess=False, file=None):
+    def map(cls, function, items, multiprocess=False, file=None, step=100):
         """
         Does a `map` operation while displaying a progress bar with
         percentage complete.
@@ -688,9 +696,16 @@ class ProgressBar(six.Iterator):
 
         file : writeable file-like object, optional
             The file to write the progress bar to.  Defaults to
-            `sys.stdout`.  If `file` is not a tty (as determined by
+            `sys.stdout`.  If ``file`` is not a tty (as determined by
             calling its `isatty` member, if any), the scrollbar will
             be completely silent.
+
+        step : int, optional
+            Update the progress bar at least every *step* steps (default: 100).
+            If ``multiprocess`` is `True`, this will affect the size
+            of the chunks of ``items`` that are submitted as separate tasks
+            to the process pool.  A large step size may make the job
+            complete faster if ``items`` is very long.
         """
 
         results = []
@@ -699,17 +714,17 @@ class ProgressBar(six.Iterator):
             file = _get_stdout()
 
         with cls(len(items), file=file) as bar:
-            step_size = max(200, bar._bar_length)
-            steps = max(int(float(len(items)) / step_size), 1)
+            default_step = max(int(float(len(items)) / bar._bar_length), 1)
+            chunksize = min(default_step, step)
             if not multiprocess:
                 for i, item in enumerate(items):
                     results.append(function(item))
-                    if (i % steps) == 0:
+                    if (i % chunksize) == 0:
                         bar.update(i)
             else:
                 p = multiprocessing.Pool()
                 for i, result in enumerate(
-                    p.imap_unordered(function, items, steps)):
+                    p.imap_unordered(function, items, chunksize=chunksize)):
                     bar.update(i)
                     results.append(result)
                 p.close()
@@ -747,7 +762,7 @@ class Spinner(object):
 
         file : writeable file-like object, optional
             The file to write the spinner to.  Defaults to
-            `sys.stdout`.  If `file` is not a tty (as determined by
+            `sys.stdout`.  If ``file`` is not a tty (as determined by
             calling its `isatty` member, if any, or special case hacks
             to detect the IPython console), the spinner will be
             completely silent.
@@ -875,7 +890,7 @@ class ProgressBarOrSpinner(object):
 
         file : writable file-like object, optional
             The file to write the to.  Defaults to `sys.stdout`.  If
-            `file` is not a tty (as determined by calling its `isatty`
+            ``file`` is not a tty (as determined by calling its `isatty`
             member, if any), only ``msg`` will be displayed: the
             `ProgressBar` or `Spinner` will be silent.
         """
@@ -1014,12 +1029,12 @@ class Getch(object):
 
 class _GetchUnix(object):
     def __init__(self):
-        import tty
-        import sys
+        import tty  # pylint: disable=W0611
+        import sys  # pylint: disable=W0611
 
         # import termios now or else you'll get the Unix
         # version on the Mac
-        import termios
+        import termios  # pylint: disable=W0611
 
     def __call__(self):
         import sys
@@ -1037,7 +1052,7 @@ class _GetchUnix(object):
 
 class _GetchWindows(object):
     def __init__(self):
-        import msvcrt
+        import msvcrt  # pylint: disable=W0611
 
     def __call__(self):
         import msvcrt

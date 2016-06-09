@@ -6,20 +6,27 @@
 import copy
 import gc
 import sys
+from collections import OrderedDict
 
 import numpy as np
 from numpy.testing import assert_allclose
 
 from ...extern import six
 from ...io import fits
-from ...tests.helper import pytest, assert_follows_unicode_guidelines
+from ...tests.helper import (pytest, assert_follows_unicode_guidelines,
+                             ignore_warnings)
 from ...utils.data import get_pkg_data_filename
 from ... import table
 from ... import units as u
 from .conftest import MaskedTable
 
+from ...extern.six.moves import zip as izip, cStringIO as StringIO
+
 try:
-    import pandas
+    with ignore_warnings(DeprecationWarning):
+        # Ignore DeprecationWarning on pandas import in Python 3.5--see
+        # https://github.com/astropy/astropy/issues/4380
+        import pandas  # pylint: disable=W0611
 except ImportError:
     HAS_PANDAS = False
 else:
@@ -256,7 +263,7 @@ class TestNewFromColumns():
         t = table_types.Table(cols)
         assert np.all(t['a'].data == np.array([1, 2, 3]))
         assert np.all(t['b'].data == np.array([4, 5, 6], dtype=np.float32))
-        assert type(t['b'][1]) == np.float32
+        assert type(t['b'][1]) is np.float32
 
     def test_from_np_array(self, table_types):
         cols = [table_types.Column(name='a', data=np.array([1, 2, 3], dtype=np.int64),
@@ -265,8 +272,8 @@ class TestNewFromColumns():
         t = table_types.Table(cols)
         assert np.all(t['a'] == np.array([1, 2, 3], dtype=np.float64))
         assert np.all(t['b'] == np.array([4, 5, 6], dtype=np.float32))
-        assert type(t['a'][1]) == np.float64
-        assert type(t['b'][1]) == np.float32
+        assert type(t['a'][1]) is np.float64
+        assert type(t['b'][1]) is np.float32
 
     def test_size_mismatch(self, table_types):
         cols = [table_types.Column(name='a', data=[1, 2, 3]),
@@ -328,6 +335,13 @@ class TestColumnAccess():
         assert np.all(t['a'] == np.array([1, 2, 3]))
         with pytest.raises(KeyError):
             t['b']  # column does not exist
+
+    def test_itercols(self, table_types):
+        names = ['a', 'b', 'c']
+        t = table_types.Table([[1], [2], [3]], names=names)
+        for name, col in izip(names, t.itercols()):
+            assert name == col.name
+            assert isinstance(col, table_types.Column)
 
 
 @pytest.mark.usefixtures('table_types')
@@ -955,6 +969,9 @@ class TestSort():
         t.sort(['b', 'a'])
         assert np.all(t['a'] == np.array([2, 1, 3, 1, 3, 2]))
         assert np.all(t['b'] == np.array([3, 4, 4, 5, 5, 6]))
+        t.sort(('a', 'b'))
+        assert np.all(t['a'] == np.array([1, 1, 2, 2, 3, 3]))
+        assert np.all(t['b'] == np.array([4, 5, 3, 6, 4, 5]))
 
     def test_multiple_with_bytes(self, table_types):
         t = table_types.Table()
@@ -1080,7 +1097,7 @@ class TestConvertNumpyArray():
         np_data = np.array(d)
         if table_types.Table is not MaskedTable:
             assert np.all(np_data == d.as_array())
-        assert not np_data is d.as_array()
+        assert np_data is not d.as_array()
         assert d.colnames == list(np_data.dtype.names)
 
         np_data = np.array(d, copy=False)
@@ -1560,3 +1577,173 @@ class TestPandas(object):
                     assert column.dtype == t2[name].dtype
                 else:
                     assert column.byteswap().newbyteorder().dtype == t2[name].dtype
+
+
+@pytest.mark.usefixtures('table_types')
+class TestReplaceColumn(SetupData):
+    def test_fail_replace_column(self, table_types):
+        """Raise exception when trying to replace column via table.columns object"""
+        self._setup(table_types)
+        t = table_types.Table([self.a, self.b])
+
+        with pytest.raises(ValueError):
+            t.columns['a'] = [1, 2, 3]
+
+        with pytest.raises(ValueError):
+            t.replace_column('not there', [1, 2, 3])
+
+    def test_replace_column(self, table_types):
+        """Replace existing column with a new column"""
+        self._setup(table_types)
+        t = table_types.Table([self.a, self.b])
+        ta = t['a']
+        tb = t['b']
+
+        vals = [1.2, 3.4, 5.6]
+        for col in (vals,
+                    table_types.Column(vals),
+                    table_types.Column(vals, name='a'),
+                    table_types.Column(vals, name='b')):
+            t.replace_column('a', col)
+            assert np.all(t['a'] == vals)
+            assert t['a'] is not ta  # New a column
+            assert t['b'] is tb  # Original b column unchanged
+            assert t.colnames == ['a', 'b']
+            assert t['a'].meta == {}
+            assert t['a'].format is None
+
+    def test_replace_index_column(self, table_types):
+        """Replace index column and generate expected exception"""
+        self._setup(table_types)
+        t = table_types.Table([self.a, self.b])
+        t.add_index('a')
+
+        with pytest.raises(ValueError) as err:
+            t.replace_column('a', [1, 2, 3])
+        assert err.value.args[0] == 'cannot replace a table index column'
+
+
+class Test__Astropy_Table__():
+    """
+    Test initializing a Table subclass from a table-like object that
+    implements the __astropy_table__ interface method.
+    """
+
+    class SimpleTable(object):
+        def __init__(self):
+            self.columns = [[1, 2, 3],
+                            [4, 5, 6],
+                            [7, 8, 9] * u.m]
+            self.names = ['a', 'b', 'c']
+            self.meta = OrderedDict([('a', 1), ('b', 2)])
+
+        def __astropy_table__(self, cls, copy, **kwargs):
+            a, b, c = self.columns
+            c.info.name = 'c'
+            cols = [table.Column(a, name='a'),
+                    table.MaskedColumn(b, name='b'),
+                    c]
+            names = [col.info.name for col in cols]
+            return cls(cols, names=names, copy=copy, meta=kwargs or self.meta)
+
+    def test_simple_1(self):
+        """Make a SimpleTable and convert to Table, QTable with copy=False, True"""
+        for table_cls in (table.Table, table.QTable):
+            col_c_class = u.Quantity if table_cls is table.QTable else table.MaskedColumn
+            for cpy in (False, True):
+                st = self.SimpleTable()
+                # Test putting in a non-native kwarg `extra_meta` to Table initializer
+                t = table_cls(st, copy=cpy, extra_meta='extra!')
+                assert t.colnames == ['a', 'b', 'c']
+                assert t.meta == {'extra_meta': 'extra!'}
+                assert np.all(t['a'] == st.columns[0])
+                assert np.all(t['b'] == st.columns[1])
+                vals = t['c'].value if table_cls is table.QTable else t['c']
+                assert np.all(st.columns[2].value == vals)
+
+                assert isinstance(t['a'], table.MaskedColumn)
+                assert isinstance(t['b'], table.MaskedColumn)
+                assert isinstance(t['c'], col_c_class)
+                assert t['c'].unit is u.m
+                assert type(t) is table_cls
+
+                # Copy being respected?
+                t['a'][0] = 10
+                assert st.columns[0][0] == 1 if cpy else 10
+
+    def test_simple_2(self):
+        """Test converting a SimpleTable and changing column names and types"""
+        st = self.SimpleTable()
+        dtypes = [np.int32, np.float32, np.float16]
+        names = ['a', 'b', 'c']
+        t = table.Table(st, dtype=dtypes, names=names, meta=OrderedDict([('c', 3)]))
+        assert t.colnames == names
+        assert all(col.dtype.type is dtype
+                   for col, dtype in zip(t.columns.values(), dtypes))
+
+        # The supplied meta is ignored.  This is consistent with current
+        # behavior when initializing from an existing astropy Table.
+        assert t.meta == st.meta
+
+    def test_kwargs_exception(self):
+        """If extra kwargs provided but without initializing with a table-like
+        object, exception is raised"""
+        with pytest.raises(TypeError) as err:
+            table.Table([[1]], extra_meta='extra!')
+        assert '__init__() got unexpected keyword argument' in str(err)
+
+
+def test_replace_column_qtable():
+    """Replace existing Quantity column with a new column in a QTable"""
+    a = [1, 2, 3] * u.m
+    b = [4, 5, 6]
+    t = table.QTable([a, b], names=['a', 'b'])
+
+    ta = t['a']
+    tb = t['b']
+    ta.info.meta = {'aa': [0, 1, 2, 3, 4]}
+    ta.info.format = '%f'
+
+    t.replace_column('a', a.to('cm'))
+    assert np.all(t['a'] == ta)
+    assert t['a'] is not ta  # New a column
+    assert t['b'] is tb  # Original b column unchanged
+    assert t.colnames == ['a', 'b']
+    assert t['a'].info.meta is None
+    assert t['a'].info.format is None
+
+def test_primary_key_is_inherited():
+    """Test whether a new Table inherits the primary_key attribute from
+    its parent Table. Issue #4672"""
+
+    t = table.Table([(2, 3, 2, 1), (8, 7, 6, 5)], names=('a', 'b'))
+    t.add_index('a')
+    original_key = t.primary_key
+
+    # can't test if tuples are equal, so just check content
+    assert original_key[0] is 'a'
+
+    t2 = t[:]
+    t3 = t.copy()
+    t4 = table.Table(t)
+
+    # test whether the reference is the same in the following
+    assert original_key == t2.primary_key
+    assert original_key == t3.primary_key
+    assert original_key == t4.primary_key
+
+    # just test one element, assume rest are equal if assert passes
+    assert t.loc[1] == t2.loc[1]
+    assert t.loc[1] == t3.loc[1]
+    assert t.loc[1] == t4.loc[1]
+
+
+def test_qtable_read_for_ipac_table_with_char_columns():
+    '''Test that a char column of a QTable is assigned no unit and not
+    a dimensionless unit, otherwise conversion of reader output to
+    QTable fails.'''
+    t1 = table.QTable([["A"]], names="B")
+    out = StringIO()
+    t1.write(out, format="ascii.ipac")
+    t2 = table.QTable.read(out.getvalue(), format="ascii.ipac", guess=False)
+    assert t2["B"].unit is None

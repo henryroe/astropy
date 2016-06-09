@@ -161,19 +161,33 @@ def _sigma_clip(data, sigma=3, sigma_lower=None, sigma_upper=None, iters=5,
     Note that along the other axis, no points would be masked, as the
     variance is higher.
     """
+    def perform_clip(_filtered_data, _kwargs):
+        """
+        Perform sigma clip by comparing the data to the minimum and maximum
+        values (median + sig * standard deviation). Use sigma_lower and
+        sigma_upper to get the correct limits. Data values less or greater
+        than the minimum / maximum values will have True set in the mask array.
+        """
+        max_value = cenfunc(_filtered_data, **_kwargs)
+        std = stdfunc(_filtered_data, **_kwargs)
+        min_value = max_value - std * sigma_lower
+        max_value += std * sigma_upper
+        if axis is not None:
+            if axis > 0:
+                min_value = np.expand_dims(min_value, axis=axis)
+                max_value = np.expand_dims(max_value, axis=axis)
+        _filtered_data.mask |= _filtered_data > max_value
+        _filtered_data.mask |= _filtered_data < min_value
 
     if sigma_lower is None:
         sigma_lower = sigma
     if sigma_upper is None:
         sigma_upper = sigma
 
+    kwargs = dict()
+
     if axis is not None:
-        cenfunc_in = cenfunc
-        stdfunc_in = stdfunc
-        cenfunc = lambda d: np.expand_dims(cenfunc_in(d, axis=axis),
-                                           axis=axis)
-        stdfunc = lambda d: np.expand_dims(stdfunc_in(d, axis=axis),
-                                           axis=axis)
+        kwargs['axis'] = axis
 
     if np.any(~np.isfinite(data)):
         data = np.ma.masked_invalid(data)
@@ -188,20 +202,10 @@ def _sigma_clip(data, sigma=3, sigma_lower=None, sigma_upper=None, iters=5,
         while filtered_data.count() != lastrej:
             i += 1
             lastrej = filtered_data.count()
-            deviation = filtered_data - cenfunc(filtered_data)
-            std = stdfunc(filtered_data)
-            filtered_data.mask |= np.ma.masked_less(deviation,
-                                                    -std * sigma_lower).mask
-            filtered_data.mask |= np.ma.masked_greater(deviation,
-                                                       std * sigma_upper).mask
+            perform_clip(filtered_data, kwargs)
     else:
         for i in range(iters):
-            deviation = filtered_data - cenfunc(filtered_data)
-            std = stdfunc(filtered_data)
-            filtered_data.mask |= np.ma.masked_less(deviation,
-                                                    -std * sigma_lower).mask
-            filtered_data.mask |= np.ma.masked_greater(deviation,
-                                                       std * sigma_upper).mask
+            perform_clip(filtered_data, kwargs)
 
     # prevent filtered_data.mask = False (scalar) if no values are clipped
     if filtered_data.mask.shape == ():
@@ -296,8 +300,19 @@ def sigma_clipped_stats(data, mask=None, mask_value=None, sigma=3.0,
         data = np.ma.MaskedArray(data, mask)
     if mask_value is not None:
         data = np.ma.masked_values(data, mask_value)
+
     data_clip = sigma_clip(data, sigma=sigma, sigma_lower=sigma_lower,
                            sigma_upper=sigma_upper, iters=iters,
                            cenfunc=cenfunc, stdfunc=stdfunc, axis=axis)
-    goodvals = np.ma.compressed(data_clip)
-    return np.mean(goodvals), np.median(goodvals), np.std(goodvals)
+
+    mean = np.ma.mean(data_clip, axis=axis)
+    median = np.ma.median(data_clip, axis=axis)
+    std = np.ma.std(data_clip, axis=axis)
+
+    if axis is None and np.ma.isMaskedArray(median):
+        # With Numpy 1.10 np.ma.median always return a MaskedArray, even with
+        # one element. So for compatibility with previous versions, we take the
+        # scalar value
+        median = median.item()
+
+    return mean, median, std

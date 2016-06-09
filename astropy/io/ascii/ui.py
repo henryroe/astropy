@@ -14,7 +14,8 @@ import re
 import os
 import sys
 import copy
-
+import time
+import warnings
 
 from . import core
 from . import basic
@@ -32,11 +33,12 @@ from . import fixedwidth
 from ...table import Table
 from ...utils.data import get_readable_fileobj
 from ...extern import six
+from ...utils.exceptions import AstropyWarning, AstropyDeprecationWarning
 
 _read_trace = []
 
 try:
-    import yaml
+    import yaml  # pylint: disable=W0611
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
@@ -186,9 +188,9 @@ def read(table, guess=None, **kwargs):
 
     Parameters
     ----------
-    table : str, file-like, list
-        Input table as a file name, file-like object, list of strings, or
-        single newline-separated string.
+    table : str, file-like, list, pathlib.Path object
+        Input table as a file name, file-like object, list of strings,
+        single newline-separated string or pathlib.Path object .
     guess : bool
         Try to guess the table format (default= ``True``)
     format : str, `~astropy.io.ascii.BaseReader`
@@ -314,7 +316,9 @@ def read(table, guess=None, **kwargs):
 
     if not guess:
         reader = get_reader(**new_kwargs)
-        # Try the fast reader first if applicable
+        # Try the fast reader version of `format` first if applicable.  Note that
+        # if user specified a fast format (e.g. format='fast_basic') this test
+        # will fail and the else-clause below will be used.
         if fast_reader_param and format is not None and 'fast_{0}'.format(format) \
                                                         in core.FAST_CLASSES:
             fast_kwargs = copy.copy(new_kwargs)
@@ -336,8 +340,8 @@ def read(table, guess=None, **kwargs):
         else:
             dat = reader.read(table)
             _read_trace.append({'kwargs': new_kwargs,
-                                'status': 'Success with slow reader which has no fast '
-                                          'reader analog (no guessing)'})
+                                'status': 'Success with specified Reader class '
+                                          '(no guessing)'})
 
     return dat
 
@@ -387,8 +391,17 @@ def _guess(table, read_kwargs, format, fast_reader):
     # Filter the full guess list so that each entry is consistent with user kwarg inputs.
     # This also removes any duplicates from the list.
     filtered_guess_kwargs = []
+    fast_reader = read_kwargs.get('fast_reader')
 
     for guess_kwargs in full_list_guess:
+        # If user specified slow reader then skip all fast readers
+        if fast_reader is False and guess_kwargs['Reader'] in core.FAST_CLASSES.values():
+            continue
+
+        # If user required a fast reader with 'force' then skip all non-fast readers
+        if fast_reader == 'force' and guess_kwargs['Reader'] not in core.FAST_CLASSES.values():
+            continue
+
         guess_kwargs_ok = True  # guess_kwargs are consistent with user_kwargs?
         for key, val in read_kwargs.items():
             # Do guess_kwargs.update(read_kwargs) except that if guess_args has
@@ -416,10 +429,18 @@ def _guess(table, read_kwargs, format, fast_reader):
     if len(filtered_guess_kwargs) <= 1:
         return None
 
+    # Define whitelist of exceptions that are expected from readers when
+    # processing invalid inputs.  Note that IOError must fall through here
+    # so one cannot simply catch any exception.
+    guess_exception_classes = (core.InconsistentTableError, ValueError, TypeError,
+                               AttributeError, core.OptionalTableImportError,
+                               core.ParameterError, cparser.CParserError)
+
     # Now cycle through each possible reader and associated keyword arguments.
     # Try to read the table using those args, and if an exception occurs then
     # keep track of the failed guess and move on.
     for guess_kwargs in filtered_guess_kwargs:
+        t0 = time.time()
         try:
             # If guessing will try all Readers then use strict req'ts on column names
             if 'Reader' not in read_kwargs:
@@ -428,14 +449,15 @@ def _guess(table, read_kwargs, format, fast_reader):
             reader = get_reader(**guess_kwargs)
             reader.guessing = True
             dat = reader.read(table)
-            _read_trace.append({'kwargs': guess_kwargs, 'status': 'Success (guessing)'})
+            _read_trace.append({'kwargs': guess_kwargs, 'status': 'Success (guessing)',
+                                'dt': '{0:.3f} ms'.format((time.time() - t0) * 1000)})
             return dat
 
-        except (core.InconsistentTableError, ValueError, TypeError, AttributeError,
-                core.OptionalTableImportError, core.ParameterError, cparser.CParserError) as err:
+        except guess_exception_classes as err:
             _read_trace.append({'kwargs': guess_kwargs,
                                 'status': '{0}: {1}'.format(err.__class__.__name__,
-                                                            str(err))})
+                                                            str(err)),
+                                'dt': '{0:.3f} ms'.format((time.time() - t0) * 1000)})
             failed_kwargs.append(guess_kwargs)
     else:
         # Failed all guesses, try the original read_kwargs without column requirements
@@ -447,8 +469,7 @@ def _guess(table, read_kwargs, format, fast_reader):
                                           '(guessing)'})
             return dat
 
-        except (core.InconsistentTableError, ValueError, ImportError,
-                core.OptionalTableImportError, core.ParameterError, cparser.CParserError) as err:
+        except guess_exception_classes as err:
             _read_trace.append({'kwargs': guess_kwargs,
                                 'status': '{0}: {1}'.format(err.__class__.__name__,
                                                             str(err))})
@@ -517,6 +538,7 @@ def _get_guess_kwargs_list(read_kwargs):
     # FixedWidthTwoLine would also be read by Basic, so it needs to come first.
     if len(read_kwargs) > 0:
         for reader in [fixedwidth.FixedWidthTwoLine,
+                       fastbasic.FastBasic,
                        basic.Basic]:
             first_kwargs = read_kwargs.copy()
             first_kwargs.update(dict(Reader=reader))
@@ -539,7 +561,8 @@ def _get_guess_kwargs_list(read_kwargs):
 
     # Cycle through the basic-style readers using all combinations of delimiter
     # and quotechar.
-    for Reader in (basic.CommentedHeader, fastbasic.FastBasic, basic.Basic,
+    for Reader in (fastbasic.FastCommentedHeader, basic.CommentedHeader,
+                   fastbasic.FastBasic, basic.Basic,
                    fastbasic.FastNoHeader, basic.NoHeader):
         for delimiter in ("|", ",", " ", "\s"):
             for quotechar in ('"', "'"):
@@ -637,13 +660,43 @@ def write(table, output=None,  format=None, Writer=None, fast_writer=True, **kwa
         List of names to exclude from output (applied after ``include_names``)
     fast_writer : bool
         Whether to use the fast Cython writer (default= ``True``)
+    overwrite : bool
+        If ``overwrite=None`` (default) and the file exists, then a
+        warning will be issued. In a future release this will instead
+        generate an exception. If ``overwrite=False`` and the file
+        exists, then an exception is raised.
+        This parameter is ignored when the ``output`` arg is not a string
+        (e.g., a file object).
     Writer : ``Writer``
         Writer class (DEPRECATED) (default= :class:`Basic`)
+
     """
+    overwrite = kwargs.pop('overwrite', None)
+    if isinstance(output, six.string_types):
+        if os.path.lexists(output):
+            if overwrite is None:
+                warnings.warn(
+                    "{} already exists. "
+                    "Automatically overwriting ASCII files is deprecated. "
+                    "Use the argument 'overwrite=True' in the future.".format(
+                        output), AstropyDeprecationWarning)
+            elif not overwrite:
+                raise IOError("{} already exists".format(output))
+
     if output is None:
         output = sys.stdout
 
     table = Table(table, names=kwargs.get('names'))
+
+    table0 = table[:0].copy()
+    core._apply_include_exclude_names(table0, kwargs.get('names'),
+                    kwargs.get('include_names'), kwargs.get('exclude_names'))
+    diff_format_with_names = set(kwargs.get('formats', [])) - set(table0.colnames)
+
+    if diff_format_with_names:
+        warnings.warn(
+            'The keys {} specified in the formats argument does not match a column name.'
+            .format(diff_format_with_names), AstropyWarning)
 
     if table.has_mixin_columns:
         fast_writer = False

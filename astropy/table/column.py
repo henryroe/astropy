@@ -19,12 +19,9 @@ from . import groups
 from . import pprint
 from .np_utils import fix_column_name
 
-from ..config import ConfigAlias
+# These "shims" provide __getitem__ implementations for Column and MaskedColumn
+from ._column_mixins import _ColumnGetitemShim, _MaskedColumnGetitemShim
 
-
-AUTO_COLNAME = ConfigAlias(
-    '0.4', 'AUTO_COLNAME', 'auto_colname',
-    'astropy.table.column', 'astropy.table')
 
 # Create a generic TableFormatter object for use by bare columns with no
 # parent table.
@@ -45,7 +42,7 @@ _comparison_functions = set(
      np.isfinite, np.isinf, np.isnan, np.sign, np.signbit])
 
 
-def col_copy(col):
+def col_copy(col, copy_indices=True):
     """
     This is a mixin-safe version of Column.copy() (with copy_data=True).
     """
@@ -59,13 +56,19 @@ def col_copy(col):
     # manner.
 
     parent_table = col.info.parent_table
+    indices = col.info.indices
     col.info.parent_table = None
+    col.info.indices = []
 
     try:
         newcol = col.copy() if hasattr(col, 'copy') else deepcopy(col)
         newcol.info = col.info
+        newcol.info.indices = deepcopy(indices or []) if copy_indices else []
+        for index in newcol.info.indices:
+            index.replace_col(col, newcol)
     finally:
         col.info.parent_table = parent_table
+        col.info.indices = indices
 
     return newcol
 
@@ -90,46 +93,17 @@ class FalseArray(np.ndarray):
 
 class ColumnInfo(BaseColumnInfo):
     attrs_from_parent = BaseColumnInfo.attr_names
+    _supports_indexing = True
 
 
-class _NDColumnProxyShim(np.ndarray):
-    """
-    This mixin class exists solely to provide an override to
-    ndarray.__getitem__ that provides the desirable behavior for single
-    item gets on columns with multi-dimensional data types.  The default
-    behavior from Numpy is to automatically view-cast these to the ndarray
-    subclass (i.e. Column), but the multi-dimensional array elements of
-    multi-dimensional columns are not, themselves, Columns.
-
-    This class is shimmed into a new class used for any BaseColumn instances
-    that contain multi-dimensional data via BaseColumn._get_nd_proxy_class
-    (this is also done explicitly in MaskedColumn.__new__ due to the
-    peculiarities of MaskedColumn).
-    """
-
-    def __getitem__(self, item):
-        if isinstance(item, INTEGER_TYPES):
-            return self.data[item]  # Return as plain ndarray or ma.MaskedArray
-        else:
-            return super(_NDColumnProxyShim, self).__getitem__(item)
-
-
-class BaseColumn(np.ndarray):
+class BaseColumn(_ColumnGetitemShim, np.ndarray):
 
     meta = MetaData()
 
-    _nd_proxy_classes = {}
-    """
-    Alternate versions of BaseColumn and any subclasses that have the
-    _NDColumnProxyShim, mapped to by the original class.  The shimmed
-    classes have the same name as the original class and are otherwise
-    indistinguishable.  This hack exists only as a performance tweak.
-    """
-
     def __new__(cls, data=None, name=None,
                 dtype=None, shape=(), length=0,
-                description=None, unit=None, format=None, meta=None, copy=False):
-
+                description=None, unit=None, format=None, meta=None,
+                copy=False, copy_indices=True):
         if data is None:
             dtype = (np.dtype(dtype).str, shape)
             self_data = np.zeros(length, dtype=dtype)
@@ -165,8 +139,6 @@ class BaseColumn(np.ndarray):
         else:
             self_data = np.array(data, dtype=dtype, copy=copy)
 
-        cls = cls._get_nd_proxy_class(self_data)
-
         self = self_data.view(cls)
         self._name = fix_column_name(name)
         self.unit = unit
@@ -174,29 +146,12 @@ class BaseColumn(np.ndarray):
         self.description = description
         self.meta = meta
         self._parent_table = None
+        self.indices = deepcopy(getattr(data, 'indices', [])) if \
+                       copy_indices else []
+        for index in self.indices:
+            index.replace_col(data, self)
 
         return self
-
-    @classmethod
-    def _get_nd_proxy_class(cls, data):
-        """
-        Creates new classes with the _NDColumnProxyShim.  See the docstring
-        for _NDColumnProxyShim for more detail.
-
-        The data argument should be the array data that will be held by the
-        column--this can be used to determine what proxy class to use if any at
-        all.
-        """
-
-        if data.ndim < 2:
-            # We only this special proxy for columns whose individual elements
-            # are themselves arrays
-            return cls
-
-        if cls not in cls._nd_proxy_classes:
-            cls._nd_proxy_classes[cls] = type(cls.__name__,
-                                              (_NDColumnProxyShim, cls), {})
-        return cls._nd_proxy_classes[cls]
 
     @property
     def data(self):
@@ -322,6 +277,8 @@ class BaseColumn(np.ndarray):
         # or viewcast e.g. obj.view(Column).  In either case we want to
         # init Column attributes for self from obj if possible.
         self.parent_table = None
+        if not hasattr(self, 'indices'): # may have been copied in __new__
+            self.indices = []
         self._copy_attrs(obj)
 
     def __array_wrap__(self, out_arr, context=None):
@@ -737,15 +694,31 @@ class Column(BaseColumn):
 
     def __new__(cls, data=None, name=None,
                 dtype=None, shape=(), length=0,
-                description=None, unit=None, format=None, meta=None, copy=False):
+                description=None, unit=None, format=None, meta=None,
+                copy=False, copy_indices=True):
 
         if isinstance(data, MaskedColumn) and np.any(data.mask):
             raise TypeError("Cannot convert a MaskedColumn with masked value to a Column")
 
         self = super(Column, cls).__new__(cls, data=data, name=name, dtype=dtype,
                                           shape=shape, length=length, description=description,
-                                          unit=unit, format=format, meta=meta, copy=copy)
+                                          unit=unit, format=format, meta=meta,
+                                          copy=copy, copy_indices=copy_indices)
         return self
+
+    def __setattr__(self, item, value):
+        if not isinstance(self, MaskedColumn) and item == "mask":
+            raise AttributeError("cannot set mask value to a column in non-masked Table")
+        super(Column, self).__setattr__(item, value)
+
+        if item == 'unit' and issubclass(self.dtype.type, np.number):
+            try:
+                converted = self.parent_table._convert_col_for_table(self)
+            except AttributeError:  # Either no parent table or parent table is None
+                pass
+            else:
+                if converted is not self:
+                    self.parent_table.replace_column(self.name, converted)
 
     def _base_repr_(self, html=False):
         # If scalar then just convert to correct numpy type and use numpy repr
@@ -805,11 +778,14 @@ class Column(BaseColumn):
     # Set items using a view of the underlying data, as it gives an
     # order-of-magnitude speed-up. [#2994]
     def __setitem__(self, index, value):
+        # update indices
+        self.info.adjust_indices(index, value, len(self))
         self.data[index] = value
 
     # # Set slices using a view of the underlying data, as it gives an
     # # order-of-magnitude speed-up.  Only gets called in Python 2.  [#3020]
     def __setslice__(self, start, stop, value):
+        self.info.adjust_indices(slice(start, stop), value, len(self))
         self.data.__setslice__(start, stop, value)
 
     def insert(self, obj, values):
@@ -860,7 +836,7 @@ class Column(BaseColumn):
     to = BaseColumn.to
 
 
-class MaskedColumn(Column, ma.MaskedArray):
+class MaskedColumn(Column, _MaskedColumnGetitemShim, ma.MaskedArray):
     """Define a masked data column for use in a Table object.
 
     Parameters
@@ -934,7 +910,8 @@ class MaskedColumn(Column, ma.MaskedArray):
 
     def __new__(cls, data=None, name=None, mask=None, fill_value=None,
                 dtype=None, shape=(), length=0,
-                description=None, unit=None, format=None, meta=None, copy=False):
+                description=None, unit=None, format=None, meta=None,
+                copy=False, copy_indices=True):
 
         if mask is None and hasattr(data, 'mask'):
             mask = data.mask
@@ -950,10 +927,8 @@ class MaskedColumn(Column, ma.MaskedArray):
         # First just pass through all args and kwargs to BaseColumn, then wrap that object
         # with MaskedArray.
         self_data = BaseColumn(data, dtype=dtype, shape=shape, length=length, name=name,
-                               unit=unit, format=format, description=description, meta=meta, copy=copy)
-
-        cls = cls._get_nd_proxy_class(self_data)
-
+                               unit=unit, format=format, description=description,
+                               meta=meta, copy=copy, copy_indices=copy_indices)
         self = ma.MaskedArray.__new__(cls, data=self_data, mask=mask)
 
         # Note: do not set fill_value in the MaskedArray constructor because this does not
@@ -965,6 +940,10 @@ class MaskedColumn(Column, ma.MaskedArray):
         self.fill_value = fill_value
 
         self.parent_table = None
+
+        # needs to be done here since self doesn't come from BaseColumn.__new__
+        for index in self.indices:
+            index.replace_col(self_data, self)
 
         return self
 
@@ -1094,28 +1073,29 @@ class MaskedColumn(Column, ma.MaskedArray):
 
         out = new_ma.view(self.__class__)
         out.parent_table = None
+        out.indices = []
         out._copy_attrs(self)
 
         return out
 
-    def __getitem__(self, item):
-        out = super(MaskedColumn, self).__getitem__(item)
-
+    def _copy_attrs_slice(self, out):
         # Fixes issue #3023: when calling getitem with a MaskedArray subclass
         # the original object attributes are not copied.
         if out.__class__ is self.__class__:
             out.parent_table = None
+            # we need this because __getitem__ does a shallow copy of indices
+            if out.indices is self.indices:
+                out.indices = []
             out._copy_attrs(self)
-
         return out
 
-    # Set items and slices using MaskedArray method, instead of falling through
-    # to the (faster) Column version which uses an ndarray view.  This doesn't
-    # copy the mask properly. See test_setting_from_masked_column test.
     def __setitem__(self, index, value):
+        # update indices
+        self.info.adjust_indices(index, value, len(self))
         ma.MaskedArray.__setitem__(self, index, value)
 
     def __setslice__(self, start, stop, value):
+        # defers to __setitem__, so we don't adjust indices here
         ma.MaskedArray.__setslice__(self, start, stop, value)
 
     # We do this to make the methods show up in the API docs

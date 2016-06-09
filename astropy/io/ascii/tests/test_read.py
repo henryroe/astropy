@@ -3,12 +3,14 @@
 # TEST_UNICODE_LITERALS
 
 import re
+from io import BytesIO
+from collections import OrderedDict
+import locale
 
 import numpy as np
+import platform
 
-from ....extern import six
 from ....extern.six.moves import cStringIO as StringIO
-from ....utils import OrderedDict
 from ....tests.helper import pytest
 from ... import ascii
 from ....table import Table
@@ -20,11 +22,18 @@ from .. import core
 from ..ui import _probably_html, get_read_trace
 
 try:
-    import bz2
+    import bz2  # pylint: disable=W0611
 except ImportError:
     HAS_BZ2 = False
 else:
     HAS_BZ2 = True
+
+try:
+    import pathlib
+except ImportError:
+    HAS_PATHLIB = False
+else:
+    HAS_PATHLIB = True
 
 
 @pytest.mark.parametrize('fast_reader', [True, False, 'force'])
@@ -205,10 +214,18 @@ def test_daophot_header_keywords():
 
 def test_daophot_multiple_aperture():
     table = ascii.read('t/daophot3.dat', Reader=ascii.Daophot)
-    assert 'MAG5' in table.colnames  # MAG5 is one of the newly created column name
+    assert 'MAG5' in table.colnames  # MAG5 is one of the newly created column names
     assert table['MAG5'][4] == 22.13  # A sample entry in daophot3.dat file
     assert table['MERR2'][0] == 1.171
     assert np.all(table['RAPERT5'] == 23.3)  # assert all the 5th apertures are same 23.3
+
+
+def test_daophot_multiple_aperture2():
+    table = ascii.read('t/daophot4.dat', Reader=ascii.Daophot)
+    assert 'MAG15' in table.colnames  # MAG15 is one of the newly created column name
+    assert table['MAG15'][1] == -7.573  # A sample entry in daophot4.dat file
+    assert table['MERR2'][0] == 0.049
+    assert np.all(table['RAPERT5'] == 5.)  # assert all the 5th apertures are same 5.0
 
 
 @pytest.mark.parametrize('fast_reader', [True, False, 'force'])
@@ -486,8 +503,7 @@ def test_read_rdb_wrong_type(fast_reader):
     table = """col1\tcol2
 N\tN
 1\tHello"""
-    err_type = ValueError if not fast_reader else ascii.InconsistentTableError
-    with pytest.raises(err_type):
+    with pytest.raises(ValueError):
         ascii.read(table, Reader=ascii.Rdb, fast_reader=fast_reader)
 
 
@@ -613,8 +629,8 @@ def get_testfiles(name=None):
         {'cols': ('NUMBER',
                   'FLUX_ISO',
                   'FLUXERR_ISO',
-                  'VALUES',
-                  'VALUES_1',
+                  'VALU-ES',
+                  'VALU-ES_1',
                   'FLAG'),
          'name': 't/sextractor.dat',
          'nrows': 3,
@@ -772,6 +788,10 @@ def get_testfiles(name=None):
          'name': 't/latex2.tex',
          'nrows': 3,
          'opts': {'Reader': ascii.AASTex}},
+        {'cols': ('cola', 'colb', 'colc'),
+         'name': 't/latex3.tex',
+         'nrows': 2,
+         'opts': {'Reader': ascii.Latex}},
         {'cols': ('Col1', 'Col2', 'Col3', 'Col4'),
          'name': 't/fixed_width_2_line.txt',
          'nrows': 2,
@@ -779,7 +799,7 @@ def get_testfiles(name=None):
     ]
 
     try:
-        import bs4
+        import bs4  # pylint: disable=W0611
         testfiles.append({'cols': ('Column 1', 'Column 2', 'Column 3'),
                           'name': 't/html.html',
                           'nrows': 3,
@@ -843,6 +863,31 @@ def test_sextractor_units():
                        'Barycenter position along MAMA x axis',
                        'Peak surface brightness above background']
     for i, colname in enumerate(table.colnames):
+        assert table[colname].unit == expected_units[i]
+        assert table[colname].description == expected_descrs[i]
+
+def test_sextractor_last_column_array():
+    """
+    Make sure that the SExtractor reader handles the last column correctly when it is array-like.
+    """
+    table = ascii.read('t/sextractor3.dat', Reader=ascii.SExtractor, guess=False)
+    expected_columns = ['X_IMAGE', 'Y_IMAGE', 'ALPHA_J2000', 'DELTA_J2000',
+                        'MAG_AUTO', 'MAGERR_AUTO',
+                        'MAG_APER', 'MAG_APER_1', 'MAG_APER_2', 'MAG_APER_3', 'MAG_APER_4', 'MAG_APER_5', 'MAG_APER_6',
+                        'MAGERR_APER', 'MAGERR_APER_1', 'MAGERR_APER_2', 'MAGERR_APER_3', 'MAGERR_APER_4', 'MAGERR_APER_5', 'MAGERR_APER_6']
+    expected_units = [Unit('pix'), Unit('pix'), Unit('deg'), Unit('deg'),
+                      Unit('mag'), Unit('mag'),
+                      Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'),
+                      Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag'), Unit('mag')]
+    expected_descrs = ['Object position along x', None,
+                       'Right ascension of barycenter (J2000)',
+                       'Declination of barycenter (J2000)',
+                       'Kron-like elliptical aperture magnitude',
+                       'RMS error for AUTO magnitude',] + [
+                       'Fixed aperture magnitude vector'] * 7 + [
+                       'RMS error vector for fixed aperture mag.'] * 7
+    for i, colname in enumerate(table.colnames):
+        assert table[colname].name == expected_columns[i]
         assert table[colname].unit == expected_units[i]
         assert table[colname].description == expected_descrs[i]
 
@@ -1056,24 +1101,18 @@ def test_table_with_no_newline():
     Test that an input file which is completely empty fails in the expected way.
     Test that an input file with one line but no newline succeeds.
     """
-    if six.PY3:
-        import io
-        _StringIO = io.BytesIO
-    else:
-        _StringIO = StringIO
-
     # With guessing
-    table = _StringIO()
+    table = BytesIO()
     with pytest.raises(ascii.InconsistentTableError):
         ascii.read(table)
 
     # Without guessing
-    table = _StringIO()
+    table = BytesIO()
     with pytest.raises(ValueError) as err:
         ascii.read(table, guess=False, fast_reader=False, format='basic')
     assert 'No header line found' in str(err.value)
 
-    table = _StringIO()
+    table = BytesIO()
     with pytest.raises(ValueError) as err:
         ascii.read(table, guess=False, fast_reader=True, format='fast_basic')
     assert 'Inconsistent data column lengths' in str(err.value)
@@ -1082,8 +1121,65 @@ def test_table_with_no_newline():
     for kwargs in [dict(),
                    dict(guess=False, fast_reader=False, format='basic'),
                    dict(guess=False, fast_reader=True, format='fast_basic')]:
-        table = _StringIO()
+        table = BytesIO()
         table.write(b'a b')
         t = ascii.read(table, **kwargs)
         assert t.colnames == ['a', 'b']
         assert len(t) == 0
+
+@pytest.mark.skipif('not HAS_PATHLIB')
+def test_path_object():
+    fpath = pathlib.Path('t/simple.txt')
+    data = ascii.read(fpath)
+
+    assert len(data) == 2
+    assert sorted(list(data.columns)) == ['test 1a', 'test2', 'test3', 'test4']
+    assert data['test2'][1] == 'hat2'
+
+
+def test_column_conversion_error():
+    """
+    Test that context information (upstream exception message) from column
+    conversion error is provided.
+    """
+    ipac = """\
+| col0   |
+| double |
+ 1  2
+"""
+    with pytest.raises(ValueError) as err:
+        ascii.read(ipac, guess=False, format='ipac')
+    assert 'Column col0 failed to convert:' in str(err.value)
+
+    with pytest.raises(ValueError) as err:
+        ascii.read(['a b', '1 2'], guess=False, format='basic', converters={'a': []})
+    assert 'no converters' in str(err.value)
+
+def test_non_C_locale_with_fast_reader():
+    """Test code that forces "C" locale while calling fast reader (#4364)"""
+    current = locale.setlocale(locale.LC_ALL)
+
+    try:
+        if platform.system() == 'Darwin':
+            locale.setlocale(locale.LC_ALL, str('de_DE'))
+        else:
+            locale.setlocale(locale.LC_ALL, str('de_DE.utf8'))
+
+        for fast_reader in (True, False, {'use_fast_converter': False}, {'use_fast_converter': True}):
+            t = ascii.read(['a b', '1.5 2'], format='basic', guess=False,
+                           fast_reader=fast_reader)
+            assert t['a'].dtype.kind == 'f'
+    except locale.Error as e:
+        pytest.skip('Locale error: {}'.format(e))
+    finally:
+        locale.setlocale(locale.LC_ALL, current)
+
+
+def test_no_units_for_char_columns():
+    '''Test that a char column of a Table is assigned no unit and not
+    a dimensionless unit.'''
+    t1 = Table([["A"]], names="B")
+    out = StringIO()
+    ascii.write(t1, out, format="ipac")
+    t2 = ascii.read(out.getvalue(), format="ipac", guess=False)
+    assert t2["B"].unit is None

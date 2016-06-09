@@ -12,12 +12,10 @@ Quick overview
 ^^^^^^^^^^^^^^
 
 For the impatient, the code below shows the basics of accessing table data.
-Where relevant there is a comment about what sort of object.  Except where
-noted, the table access returns objects that can be modified in order to
-update table data or properties.
-In cases where is returned and how
-the data contained in that object relate to the original table data
-(i.e. whether it is a copy or reference, see :ref:`copy_versus_reference`).
+Where relevant there is a comment about what sort of object is returned.
+Except where noted, table access returns objects that can be modified in order
+to update the original table data or properties.  See also the section on
+:ref:`copy_versus_reference` to learn more about this topic.
 
 **Make table**
 ::
@@ -63,7 +61,7 @@ the data contained in that object relate to the original table data
 **Print table or column**
 ::
 
-  print t      # Print formatted version of table to the screen
+  print(t)     # Print formatted version of table to the screen
   t.pprint()   # Same as above
   t.pprint(show_unit=True)  # Show column unit
   t.pprint(show_name=False)  # Do not show column names
@@ -71,9 +69,9 @@ the data contained in that object relate to the original table data
 
   t.more()  # Interactively scroll through table like Unix "more"
 
-  print t['a'] # Formatted column values
+  print(t['a'])    # Formatted column values
   t['a'].pprint()  # Same as above, with same options as Table.pprint()
-  t['a'].more()  # Interactively scroll through column
+  t['a'].more()    # Interactively scroll through column
 
   lines = t.pformat()  # Formatted table as a list of lines (same options as pprint)
   lines = t['a'].pformat()  # Formatted column values as a list
@@ -86,6 +84,7 @@ For all the following examples it is assumed that the table has been created as 
 
   >>> from astropy.table import Table, Column
   >>> import numpy as np
+  >>> import astropy.units as u
 
   >>> arr = np.arange(15, dtype=np.int32).reshape(5, 3)
   >>> t = Table(arr, names=('a', 'b', 'c'), meta={'keywords': {'key1': 'val1'}})
@@ -102,6 +101,8 @@ For all the following examples it is assumed that the table has been created as 
        9.000  10  11
       12.000  13  14
 
+
+.. _table-summary-information:
 
 Summary information
 """""""""""""""""""
@@ -442,17 +443,17 @@ Column alignment
 ''''''''''''''''
 
 Individual columns have the ability to be aligned in a number of different
-ways, for an enhanced viewing experience.
+ways, for an enhanced viewing experience::
 
- >>> t1 = Table()
- >>> t1['long column name 1'] = [1,2,3]
- >>> t1['long column name 2'] = [4,5,6]
- >>> t1['long column name 3'] = [7,8,9]
- >>> t1['long column name 4'] = [700000,800000,900000]
- >>> t1['long column name 2'].format = '<'
- >>> t1['long column name 3'].format = '0='
- >>> t1['long column name 4'].format = '^'
- >>> t1.pprint()
+  >>> t1 = Table()
+  >>> t1['long column name 1'] = [1, 2, 3]
+  >>> t1['long column name 2'] = [4, 5, 6]
+  >>> t1['long column name 3'] = [7, 8, 9]
+  >>> t1['long column name 4'] = [700000, 800000, 900000]
+  >>> t1['long column name 2'].format = '<'
+  >>> t1['long column name 3'].format = '0='
+  >>> t1['long column name 4'].format = '^'
+  >>> t1.pprint()
    long column name 1 long column name 2 long column name 3 long column name 4
   ------------------ ------------------ ------------------ ------------------
                    1 4                  000000000000000007       700000
@@ -460,26 +461,61 @@ ways, for an enhanced viewing experience.
                    3 6                  000000000000000009       900000
 
 Conveniently, alignment can be handled another way, by passing a list to the
-keyword argument ``align``.
+keyword argument ``align``::
 
- >>> t1 = Table()
- >>> t1['column1'] = [1,2,3,4,5]
- >>> t1['column2'] = [2,4,6,8,10]
- >>> t1.pprint(align=['<','0='])
-   column1 column2
- ------- -------
- 1       0000002
- 2       0000004
- 3       0000006
- 4       0000008
- 5       0000010
+  >>> t1 = Table()
+  >>> t1['column1'] = [1, 2, 3]
+  >>> t1['column2'] = [2, 4, 6]
+  >>> t1.pprint(align=['<', '0='])
+  column1 column2
+  ------- -------
+  1       0000002
+  2       0000004
+  3       0000006
 
-By default, if the length of the list does not match the number of columns
-within the table, alignment defaults to right-aligned columns. This default
-behavior also holds true even if a single alignment character is passed in as a
-list (e.g., align=['^']), where global alignment of all columns within a table
-is intended. For very large tables, this can be a nuisance, and so looping is the
-recommended solution for this task.
+It is also possible to set the alignment of all columns with a single
+string value::
+
+  >>> t1.pprint(align='^')
+  column1 column2
+  ------- -------
+     1       2
+     2       4
+     3       6
+
+The fill character for justification can be set as a prefix to the
+alignment character (see `Format Specification Mini-Language
+<https://docs.python.org/3/library/string.html#format-specification-mini-language>`_
+for additional explanation).  This can be done both in the ``align`` argument
+and in the column ``format`` attribute.  Note the interesting interaction below::
+
+  >>> t1 = Table([[1.0, 2.0], [1, 2]], names=['column1', 'column2'])
+
+  >>> t1['column1'].format = '#^.2f'
+  >>> t1.pprint()
+  column1 column2
+  ------- -------
+  ##1.00#       1
+  ##2.00#       2
+
+Now if we set a global align, it seems like our original column format
+got lost::
+
+  >>> t1.pprint(align='!<')
+  column1 column2
+  ------- -------
+  1.00!!! 1!!!!!!
+  2.00!!! 2!!!!!!
+
+The way to avoid this is to explicitly specify the alignment strings
+for every column and use ``None`` where the column format should be
+used::
+
+  >>> t1.pprint(align=[None, '!<'])
+  column1 column2
+  ------- -------
+  ##1.00# 1!!!!!!
+  ##2.00# 2!!!!!!
 
 pformat() method
 ''''''''''''''''
@@ -532,16 +568,19 @@ any array::
          [[ 5,  6],
           [50, 60]]])
 
-Columns and Quantities
-''''''''''''''''''''''
-Columns with units that the `astropy.units` package understands can be
-converted explicitly to ``~astropy.units.Quantity`` objects via the
+.. _columns_with_units:
+
+Columns with Units
+''''''''''''''''''
+
+A `~astropy.table.Column` object with units within a standard
+`~astropy.table.Table` (as opposed to a `~astropy.table.QTable`) has certain
+quantity-related conveniences available.  To begin with, it can be converted
+explicitly to a `~astropy.units.Quantity` object via the
 :attr:`~astropy.table.Column.quantity` property and the
 :meth:`~astropy.table.Column.to` method::
 
-  >>> from astropy.table import Table
-  >>> from astropy import units as u
-  >>> data = [[1., 2., 3.],[40000., 50000., 60000.]]
+  >>> data = [[1., 2., 3.], [40000., 50000., 60000.]]
   >>> t = Table(data, names=('a', 'b'))
   >>> t['a'].unit = u.m
   >>> t['b'].unit = 'km/s'
@@ -597,10 +636,11 @@ expressions (see the warning below for caveats to this)::
     -0.988031624093
      0.893996663601
 
-  This is wrong both in that it says the unit is degrees, *and* ``sin``
-  treated the values and radians rather than degrees.  If at all in
-  doubt that you'll get the right result, the safest choice is to
-  explicitly convert to `~astropy.units.Quantity`::
+  This is wrong both in that it says the unit is degrees, *and* ``sin`` treated
+  the values and radians rather than degrees.  If at all in doubt that you'll
+  get the right result, the safest choice is to either use
+  `~astropy.table.QTable` or to explicitly convert to
+  `~astropy.units.Quantity`::
 
     >>> np.sin(t['angle'].quantity)  # doctest: +FLOAT_CMP
     <Quantity [ 0.5, 1. ]>

@@ -21,6 +21,9 @@ table from one or more input tables.  This includes:
    * - `Grouped operations`_
      - Group tables and columns by keys
      - `~astropy.table.Table.group_by`
+   * - `Binning`_
+     - Binning tables
+     - `~astropy.table.Table.group_by`
    * - `Stack vertically`_
      - Concatenate input tables along rows
      - `~astropy.table.vstack`
@@ -171,11 +174,10 @@ groups, e.g.::
 
 One can iterate over the group sub-tables and corresponding keys with::
 
-  >>> from itertools import izip
-  >>> for key, group in izip(obs_by_name.groups.keys, obs_by_name.groups):
+  >>> for key, group in zip(obs_by_name.groups.keys, obs_by_name.groups):
   ...     print('****** {0} *******'.format(key['name']))
   ...     print(group)
-  ...     print
+  ...     print('')
   ...
   ****** M101 *******
   name  obs_date  mag_b mag_v
@@ -217,10 +219,10 @@ Examples::
   >>> key_vals = np.array(['foo', 'bar', 'foo', 'foo', 'qux', 'qux'])
   >>> cg = c.group_by(key_vals)
 
-  >>> for key, group in izip(cg.groups.keys, cg.groups):
+  >>> for key, group in zip(cg.groups.keys, cg.groups):
   ...     print('****** {0} *******'.format(key))
   ...     print(group)
-  ...     print
+  ...     print('')
   ...
   ****** bar *******
    a
@@ -292,7 +294,7 @@ A single column of data can be aggregated as well::
   >>> key_vals = np.array(['foo', 'bar', 'foo', 'foo', 'qux', 'qux'])
   >>> cg = c.group_by(key_vals)
   >>> cg_sums = cg.groups.aggregate(np.sum)
-  >>> for key, cg_sum in izip(cg.groups.keys, cg_sums):
+  >>> for key, cg_sum in zip(cg.groups.keys, cg_sums):
   ...     print('Sum for {0} = {1}'.format(key, cg_sum))
   ...
   Sum for bar = 2
@@ -355,7 +357,7 @@ An example of using this function is::
   >>> t_positive = tg.groups.filter(all_positive)
   >>> for group in t_positive.groups:
   ...     print(group)
-  ...     print
+  ...     print('')
   ...
    a   b   c
   --- --- ---
@@ -378,6 +380,59 @@ either `True` or `False`.  For example::
       if np.any(column < 0):
           return False
       return True
+
+.. _table_binning:
+
+Binning
+^^^^^^^
+
+A common tool in analysis is to bin a table based on some reference value.
+Examples:
+
+- Photometry of a binary star in several bands taken over a
+  span of time which should be binned by orbital phase.
+- Reducing the sampling density for a table by combining
+  100 rows at a time.
+- Unevenly sampled historical data which should binned to
+  four points per year.
+
+All of these examples of binning a table can be easily accomplished using
+`grouped operations`_.  The examples in that section are focused on the
+case of discrete key values such as the name of a source.  In this
+section we show a simple yet powerful way of applying grouped operations to
+accomplish binning on key values such as time, phase or row number.
+
+The common theme in all these cases is to convert the key value array into
+a new float- or int-valued array whose values are identical for rows in the same
+output bin.  As an example, generate a fake light curve::
+
+  >>> year = np.linspace(2000.0, 2010.0, 200)  # 200 observations over 10 years
+  >>> period = 1.811
+  >>> y0 = 2005.2
+  >>> mag = 14.0 + 1.2 * np.sin(2 * np.pi * (year - y0) / period)
+  >>> phase = ((year - y0) / period) % 1.0
+  >>> dat = Table([year, phase, mag], names=['year', 'phase', 'mag'])
+
+Now make an array that will be used for binning the data by 0.25 year
+intervals::
+
+  >>> year_bin = np.trunc(year / 0.25)
+
+This has the property that all samples in each 0.25 year bin have the same
+value of ``year_bin``.  Think of ``year_bin`` as the bin number for ``year``.
+Then do the binning by grouping and immediately aggregating with ``np.mean``.
+
+  >>> dat_grouped = dat.group_by(year_bin)
+  >>> dat_binned = dat_grouped.groups.aggregate(np.mean)
+
+Then one might plot the results with ``plt.plot(dat_binned['year'], dat_binned['mag'],
+'.')``.   Alternately one could bin into 10 phase bins::
+
+  >>> phase_bin = np.trunc(phase / 0.1)
+  >>> dat_grouped = dat.group_by(phase_bin)
+  >>> dat_binned = dat_grouped.groups.aggregate(np.mean)
+
+This time plot with ``plt.plot(dat_binned['phase'], dat_binned['mag'])``.
 
 .. _stack-vertically:
 
@@ -430,7 +485,7 @@ table those values are marked as missing.  This is the default behavior and corr
       M31 1999-01-05  43.1
       M82 2012-10-30  45.0
 
-  >>> print(vstack([obs1, obs2], join_type='exact'))
+  >>> print(vstack([obs1, obs2], join_type='exact'))  # doctest: +IGNORE_EXCEPTION_DETAIL
   Traceback (most recent call last):
     ...
   TableMergeError: Inconsistent columns in input arrays (use 'inner'
@@ -503,7 +558,7 @@ number of rows::
     1 foo 1.4  ham  eggs
     2 bar 2.1 spam toast
 
-  >>> print(hstack([t1, t2], join_type='exact'))
+  >>> print(hstack([t1, t2], join_type='exact'))  # doctest: +IGNORE_EXCEPTION_DETAIL
   Traceback (most recent call last):
     ...
   TableMergeError: Inconsistent number of rows in input arrays (use 'inner' or
@@ -794,6 +849,12 @@ By default, a warning is emitted in the last case (both metadata values are not
 - ``'warn'`` - a warning is emitted, the value for the last table is picked
 - ``'error'`` - an exception is raised
 
+The default strategies for merging metadata can be augmented or customized by
+defining subclasses of the `~astropy.utils.metadata.MergeStrategy` base class.
+In most cases one also will use the
+`~astropy.utils.metadata.enable_merge_strategies` for enable the custom
+strategies. The linked documentation strings provide details.
+
 Merging column attributes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -826,8 +887,8 @@ Unique rows
 Sometimes it makes sense to use only rows with unique key columns or even
 fully unique rows from a table. This can be done using the above described
 :func:`~astropy.table.Table.group_by` method and ``groups`` attribute, or
-with the `~astropy.table.unique` convenience method. The
-`~astropy.table.unique` method returns with a sorted table containing the
+with the `~astropy.table.unique` convenience function. The
+`~astropy.table.unique` function returns with a sorted table containing the
 first row for each unique ``keys`` column value. If no ``keys`` is provided
 it returns with a sorted table containing all the fully unique rows.
 

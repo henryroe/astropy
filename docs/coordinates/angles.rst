@@ -108,7 +108,7 @@ Angles will also behave correctly for appropriate arithmetic operations::
 |Angle| objects can also be used for creating coordinate objects::
 
     >>> from astropy.coordinates import ICRS
-    >>> ICRS(Angle(1, u.radian), Angle(0.5, u.radian)) # doctest: +FLOAT_CMP
+    >>> ICRS(Angle(1, u.radian), Angle(0.5, u.radian))  # doctest: +FLOAT_CMP
     <ICRS Coordinate: (ra, dec) in deg
         (57.2957795131, 28.6478897565)>
 
@@ -129,7 +129,7 @@ Longitude and Latitude objects
 |Longitude| and |Latitude| are two specialized subclasses of the |Angle|
 class that are used for all of the spherical coordinate classes.
 |Longitude| is used to represent values like right ascension, Galactic
-longitude, and azimuth (for ecliptic, Galactic, and Alt-Az coordinates,
+longitude, and azimuth (for Equatorial, Galactic, and Alt-Az coordinates,
 respectively).  |Latitude| is used for declination, Galactic latitude, and
 elevation.
 
@@ -164,5 +164,5 @@ of being bounded so that::
   -90.0 * u.deg <= angle(s) <= +90.0 * u.deg
 
 Any attempt to set a value outside that range will result in a
-`~.exceptions.ValueError`.
+`ValueError`.
 

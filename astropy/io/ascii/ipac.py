@@ -11,7 +11,7 @@ ipac.py:
 from __future__ import absolute_import, division, print_function
 
 import re
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from textwrap import wrap
 from warnings import warn
 
@@ -21,7 +21,6 @@ from ...extern.six.moves import zip
 from . import core
 from . import fixedwidth
 from . import basic
-from ...utils import OrderedDict
 from ...utils.exceptions import AstropyUserWarning
 from ...table.pprint import _format_funcs, _auto_format_func
 
@@ -86,9 +85,10 @@ class IpacHeader(fixedwidth.FixedWidthHeader):
 
     def process_lines(self, lines):
         """Generator to yield IPAC header lines, i.e. those starting and ending with
-        delimiter character."""
+        delimiter character (with trailing whitespace stripped)"""
         delim = self.splitter.delimiter
         for line in lines:
+            line = line.rstrip()
             if line.startswith(delim) and line.endswith(delim):
                 yield line.strip(delim)
 
@@ -193,7 +193,7 @@ class IpacHeader(fixedwidth.FixedWidthHeader):
                 col.raw_type = header_vals[1][i].strip(' -')
                 col.type = self.get_col_type(col)
             if len(header_vals) > 2:
-                col.unit = header_vals[2][i].strip()  # Can't strip dashes here
+                col.unit = header_vals[2][i].strip() or None  # Can't strip dashes here
             if len(header_vals) > 3:
                 # The IPAC null value corresponds to the io.ascii bad_value.
                 # In this case there isn't a fill_value defined, so just put

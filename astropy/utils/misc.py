@@ -15,23 +15,24 @@ import difflib
 import inspect
 import json
 import os
-import re
 import signal
 import sys
 import traceback
 import unicodedata
+import locale
+import threading
 
-from collections import defaultdict
+from contextlib import contextmanager
+from collections import defaultdict, OrderedDict
 
 from ..extern import six
 from ..extern.six.moves import urllib
-from ..utils.compat.odict import OrderedDict
 
 
 __all__ = ['isiterable', 'silence', 'format_exception', 'NumpyRNGContext',
            'find_api_page', 'is_path_hidden', 'walk_skip_hidden',
            'JsonCustomEncoder', 'indent', 'InheritDocstrings',
-           'OrderedDescriptor', 'OrderedDescriptorContainer']
+           'OrderedDescriptor', 'OrderedDescriptorContainer', 'set_locale']
 
 
 def isiterable(obj):
@@ -233,21 +234,33 @@ def find_api_page(obj, version=None, openinbrowser=True, timeout=None):
         uf = urllib.request.urlopen(baseurl + 'objects.inv', timeout=timeout)
 
     try:
-        # we read these lines so that `oistr` only gets the compressed
-        # contents, not the header information
-        isvers = uf.readline().rstrip().decode('utf-8')  # intersphinx version line
-        proj = uf.readline().rstrip().decode('utf-8')  # project name
-        vers = uf.readline().rstrip().decode('utf-8')  # project version
-        uf.readline().rstrip().decode('utf-8')
-        oistr = uf.read()
+        oiread = uf.read()
+
+        # need to first read/remove the first four lines, which have info before
+        # the compressed section with the actual object inventory
+        idx = -1
+        headerlines = []
+        for _ in range(4):
+            oldidx = idx
+            idx = oiread.index(b'\n', oldidx + 1)
+            headerlines.append(oiread[(oldidx+1):idx].decode('utf-8'))
+
+        # intersphinx version line, project name, and project version
+        ivers, proj, vers, compr  = headerlines
+        if 'The remainder of this file is compressed using zlib' not in compr:
+            raise ValueError('The file downloaded from {0} does not seem to be'
+                             'the usal Sphinx objects.inv format.  Maybe it '
+                             'has changed?'.format(baseurl + 'objects.inv'))
+
+        compressed = oiread[(idx+1):]
     finally:
         uf.close()
 
-    oistr = decompress(oistr).decode('utf-8')
+    decompressed = decompress(compressed).decode('utf-8')
 
     resurl = None
 
-    for l in oistr.strip().splitlines():
+    for l in decompressed.strip().splitlines():
         ls = l.split()
         name = ls[0]
         loc = ls[3]
@@ -801,3 +814,39 @@ class OrderedDescriptorContainer(type):
 
         super(OrderedDescriptorContainer, cls).__init__(cls_name, bases,
                                                         members)
+
+
+LOCALE_LOCK = threading.Lock()
+
+@contextmanager
+def set_locale(name):
+    """
+    Context manager to temporarily set the locale to ``name``.
+
+    An example is setting locale to "C" so that the C strtod()
+    function will use "." as the decimal point to enable consistent
+    numerical string parsing.
+
+    Note that one cannot nest multiple set_locale() context manager
+    statements as this causes a threading lock.
+
+    This code taken from http://stackoverflow.com/questions/18593661/.
+
+    Parameters
+    ==========
+    name : str
+        Locale name, e.g. "C" or "fr_FR".
+    """
+    name = str(name)
+
+    with LOCALE_LOCK:
+        saved = locale.setlocale(locale.LC_ALL)
+        if saved == name:
+            # Don't do anything if locale is already the requested locale
+            yield
+        else:
+            try:
+                locale.setlocale(locale.LC_ALL, name)
+                yield
+            finally:
+                locale.setlocale(locale.LC_ALL, saved)

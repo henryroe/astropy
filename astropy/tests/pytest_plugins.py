@@ -13,6 +13,7 @@ from ..extern.six.moves import filter
 
 import ast
 import doctest
+import datetime
 import fnmatch
 import imp
 import io
@@ -22,20 +23,19 @@ import os
 import re
 import sys
 import types
+from collections import OrderedDict
 
 from ..config.paths import set_temp_config, set_temp_cache
-from .helper import (
-    pytest, treat_deprecations_as_exceptions, enable_deprecations_as_exceptions)
+from .helper import pytest, treat_deprecations_as_exceptions, ignore_warnings
+from .helper import enable_deprecations_as_exceptions  # pylint: disable=W0611
 from .disable_internet import turn_off_internet, turn_on_internet
-from .output_checker import AstropyOutputChecker, FIX, FLOAT_CMP
-from ..utils import OrderedDict
+from .output_checker import AstropyOutputChecker, FIX
 from ..utils.argparse import writeable_directory
 from ..utils.introspection import resolve_name
 
-# Needed for Python 2.6 compatibility
 try:
     import importlib.machinery as importlib_machinery
-except ImportError:
+except ImportError:  # Python 2.7
     importlib_machinery = None
 
 # these pytest hooks allow us to mark tests and run the marked tests with
@@ -158,7 +158,10 @@ def pytest_configure(config):
         # handling __doctest_skip__) doesn't happen.
         def collect(self):
             if self.fspath.basename == "conftest.py":
-                module = self.config._conftest.importconftest(self.fspath)
+                try:
+                    module = self.config._conftest.importconftest(self.fspath)
+                except AttributeError:  # pytest >= 2.8.0
+                    module = self.config.pluginmanager._importconftest(self.fspath)
             else:
                 try:
                     module = self.fspath.pyimport()
@@ -188,8 +191,14 @@ def pytest_configure(config):
         def runtest(self):
             # satisfy `FixtureRequest` constructor...
             self.funcargs = {}
-            self._fixtureinfo = doctest_plugin.FuncFixtureInfo((), [], {})
-            fixture_request = doctest_plugin.FixtureRequest(self)
+            try:
+                self._fixtureinfo = doctest_plugin.FuncFixtureInfo((), [], {})
+                fixture_request = doctest_plugin.FixtureRequest(self)
+            except AttributeError:  # pytest >= 2.8.0
+                python_plugin = config.pluginmanager.getplugin('python')
+                self._fixtureinfo = python_plugin.FuncFixtureInfo((), [], {})
+                fixture_request = python_plugin.FixtureRequest(self)
+
             failed, tot = doctest.testfile(
                 str(self.fspath), module_relative=False,
                 optionflags=opts, parser=DocTestParserPlus(),
@@ -292,9 +301,6 @@ class DoctestPlus(object):
         # Directories to ignore when adding doctests
         self._ignore_paths = []
 
-        if run_rst_doctests and six.PY3:
-            self._run_rst_doctests = False
-
     def pytest_ignore_collect(self, path, config):
         """Skip paths that match any of the doctest_norecursedirs patterns."""
 
@@ -352,10 +358,10 @@ class DoctestPlus(object):
             return self._doctest_module_item_cls(path, parent)
         elif self._run_rst_doctests and path.ext == '.rst':
             # Ignore generated .rst files
-            parts = bytes(path).split(os.path.sep)
-            if (path.basename.startswith(b'_') or
-                any(x.startswith(b'_') for x in parts) or
-                any(x == b'api' for x in parts)):
+            parts = str(path).split(os.path.sep)
+            if (path.basename.startswith('_') or
+                    any(x.startswith('_') for x in parts) or
+                    any(x == 'api' for x in parts)):
                 return None
 
             # TODO: Get better names on these items when they are
@@ -533,7 +539,8 @@ def pytest_runtest_teardown(item, nextitem):
 PYTEST_HEADER_MODULES = OrderedDict([('Numpy', 'numpy'),
                                      ('Scipy', 'scipy'),
                                      ('Matplotlib', 'matplotlib'),
-                                     ('h5py', 'h5py')])
+                                     ('h5py', 'h5py'),
+                                     ('Pandas', 'pandas')])
 
 # This always returns with Astropy's version
 from .. import __version__
@@ -543,7 +550,10 @@ TESTED_VERSIONS = OrderedDict([('Astropy', __version__)])
 
 def pytest_report_header(config):
 
-    stdoutencoding = getattr(sys.stdout, 'encoding') or 'ascii'
+    try:
+        stdoutencoding = sys.stdout.encoding or 'ascii'
+    except AttributeError:
+        stdoutencoding = 'ascii'
 
     if six.PY2:
         args = [x.decode('utf-8') for x in config.args]
@@ -560,7 +570,21 @@ def pytest_report_header(config):
         s = "\nRunning tests with Astropy version {0}.\n".format(
             TESTED_VERSIONS['Astropy'])
 
-    s += "Running tests in {0}.\n\n".format(" ".join(args))
+    # Per https://github.com/astropy/astropy/pull/4204, strip the rootdir from
+    # each directory argument
+    if hasattr(config, 'rootdir'):
+        rootdir = str(config.rootdir)
+        if not rootdir.endswith(os.sep):
+            rootdir += os.sep
+
+        dirs = [arg[len(rootdir):] if arg.startswith(rootdir) else arg
+                for arg in args]
+    else:
+        dirs = args
+
+    s += "Running tests in {0}.\n\n".format(" ".join(dirs))
+
+    s += "Date: {0}\n\n".format(datetime.datetime.now().isoformat()[:19])
 
     from platform import platform
     plat = platform()
@@ -585,7 +609,8 @@ def pytest_report_header(config):
 
     for module_display, module_name in six.iteritems(PYTEST_HEADER_MODULES):
         try:
-            module = resolve_name(module_name)
+            with ignore_warnings(DeprecationWarning):
+                module = resolve_name(module_name)
         except ImportError:
             s += "{0}: not available\n".format(module_display)
         else:
@@ -602,9 +627,6 @@ def pytest_report_header(config):
             opts.append(op)
     if opts:
         s += "Using Astropy options: {0}.\n".format(" ".join(opts))
-
-    if six.PY3 and (config.getini('doctest_rst') or config.option.doctest_rst):
-        s += "Running doctests in .rst files is not supported on Python 3.x\n"
 
     if not six.PY3:
         s = s.encode(stdoutencoding, 'replace')

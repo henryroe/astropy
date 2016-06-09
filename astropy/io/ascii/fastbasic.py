@@ -1,12 +1,14 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
+import re
+from collections import OrderedDict
+
 from . import core
 from ...extern import six
 from ...table import Table
 from . import cparser
 from ...extern.six.moves import zip as izip
-from ...utils import OrderedDict
-import re
+from ...utils import set_locale
 
 @six.add_metaclass(core.MetaBaseReader)
 class FastBasic(object):
@@ -25,6 +27,13 @@ class FastBasic(object):
     strict_names = False
 
     def __init__(self, default_kwargs={}, **user_kwargs):
+        # Make sure user does not set header_start to None for a reader
+        # that expects a non-None value (i.e. a number >= 0).  This mimics
+        # what happens in the Basic reader.
+        if (default_kwargs.get('header_start', 0) is not None and
+                user_kwargs.get('header_start', 0) is None):
+            raise ValueError('header_start cannot be set to None for this Reader')
+
         kwargs = default_kwargs.copy()
         kwargs.update(user_kwargs) # user kwargs take precedence over defaults
         delimiter = kwargs.pop('delimiter', ' ')
@@ -78,6 +87,8 @@ class FastBasic(object):
         elif 'data_Splitter' in self.kwargs or 'header_Splitter' in self.kwargs:
             raise core.ParameterError("The C reader does not use a Splitter class")
 
+        self.strict_names = self.kwargs.pop('strict_names', False)
+
         self.engine = cparser.CParser(table, self.strip_whitespace_lines,
                                       self.strip_whitespace_fields,
                                       delimiter=self.delimiter,
@@ -96,26 +107,29 @@ class FastBasic(object):
             try_float = {}
             try_string = {}
 
-        data, comments = self.engine.read(try_int, try_float, try_string)
+        with set_locale('C'):
+            data, comments = self.engine.read(try_int, try_float, try_string)
+
         meta = OrderedDict()
         if comments:
             meta['comments'] = comments
         return Table(data, names=list(self.engine.get_names()), meta=meta)
 
     def check_header(self):
+        names = self.engine.get_header_names() or self.engine.get_names()
         if self.strict_names:
             # Impose strict requirements on column names (normally used in guessing)
             bads = [" ", ",", "|", "\t", "'", '"']
-            for name in self.engine.get_names():
-                if (_is_number(name) or
+            for name in names:
+                if (core._is_number(name) or
                     len(name) == 0 or
                     name[0] in bads or
                     name[-1] in bads):
                     raise ValueError('Column name {0!r} does not meet strict name requirements'
                                      .format(name))
         # When guessing require at least two columns
-        if self.guessing and len(self.engine.get_names()) <= 1:
-            raise ValueError
+        if self.guessing and len(names) <= 1:
+            raise ValueError('Strict name guessing requires at least two columns')
 
     def write(self, table, output):
         """
@@ -237,6 +251,9 @@ class FastCommentedHeader(FastBasic):
                 commented_lines.append(line[1:])
                 if len(commented_lines) == self.header_start + 1:
                     break
+
+        if len(commented_lines) <= self.header_start:
+            raise cparser.CParserError('not enough commented lines')
 
         self.engine.setup_tokenizer([commented_lines[self.header_start]])
         self.engine.header_start = 0

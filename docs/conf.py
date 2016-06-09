@@ -68,6 +68,8 @@ del intersphinx_mapping['astropy']
 
 # add any custom intersphinx for astropy
 intersphinx_mapping['pytest'] = ('http://pytest.org/latest/', None)
+intersphinx_mapping['ipython'] = ('http://ipython.readthedocs.io/en/stable/', None)
+intersphinx_mapping['pandas'] = ('http://pandas.pydata.org/pandas-docs/stable/', None)
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -95,7 +97,7 @@ rst_epilog += """
 
 project = u'Astropy'
 author = u'The Astropy Developers'
-copyright = u'2011-2015, ' + author
+copyright = u'2011-2016, ' + author
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -192,6 +194,8 @@ else:
 edit_on_github_source_root = ""
 edit_on_github_doc_root = "docs"
 
+edit_on_github_skip_regex = '_.*|api/.*'
+
 github_issues_url = 'https://github.com/astropy/astropy/issues/'
 
 # Enable nitpicky mode - which ensures that all references in the docs
@@ -209,3 +213,41 @@ for line in open('nitpick-exceptions'):
 
 if six.PY2:
     nitpick_ignore.extend([('py:obj', six.u('bases'))])
+
+# -- Options for the Sphinx gallery -------------------------------------------
+
+try:
+    import sphinx_gallery
+    extensions += ["sphinx_gallery.gen_gallery"]
+
+    sphinx_gallery_conf = {
+        'mod_example_dir': 'generated/modules', # path to store the module using example template
+        'filename_pattern': '^((?!skip_).)*$', # execute all examples except those that start with "skip_"
+        'examples_dirs': '..{}examples'.format(os.sep), # path to the examples scripts
+        'gallery_dirs': 'generated/examples', # path to save gallery generated examples
+        'reference_url': {
+            'astropy': None,
+            'matplotlib': 'http://matplotlib.org/',
+            'numpy': 'http://docs.scipy.org/doc/numpy/',
+        }
+    }
+
+    # TODO: remove the code below once a better solution is implemented in
+    # sphinx-gallery.
+    # We want to make sure that gallery examples fail the build if there are
+    # any errors, when building the docs with the option to fail if there are
+    # any warnings. However, at the moment, we can only either fail the build
+    # completely or not fail it at all, until this is fixed properly in
+    # sphinx-gallery: https://github.com/sphinx-gallery/sphinx-gallery/pull/97
+    # Therefore, for now we simply check if we are on Travis, and if so, we
+    # enabled the abort_on_example_error.
+    if os.environ.get('TRAVIS', 'false') == 'true':
+        def setup(app):
+            app.config.values['abort_on_example_error'] = (True, 'html', ())
+
+except ImportError:
+    def setup(app):
+        app.warn('The sphinx_gallery extension is not installed, so the '
+                 'gallery will not be built.  You will probably see '
+                 'additional warnings about undefined references due '
+                 'to this.')

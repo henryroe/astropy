@@ -13,13 +13,6 @@ The `~astropy.coordinates` package provides classes for representing a
 variety of celestial/spatial  coordinates, as well as tools for
 converting between common coordinate systems in a uniform way.
 
-.. note::
-
-    If you have existing code that uses `~astropy.coordinates` functionality from
-    Astropy version 0.3.x or earlier, please see the section on `Migrating from
-    pre-v0.4 coordinates`_.  The interface has changed in ways that are not
-    backward compatible in many circumstances.
-
 Getting Started
 ===============
 
@@ -133,7 +126,13 @@ This form of `~astropy.coordinates.SkyCoord.transform_to` also makes it
 straightforward to convert from celestial coordinates to
 `~astropy.coordinates.AltAz` coordinates, allowing the use of |skycoord|
 as a tool for planning observations.  For a more complete example of
-this, see :doc:`observing-example`.
+this, see :ref:`sphx_glr_generated_examples_coordinates_plot_obs-planning.py`.
+
+Some coordinate frames such as `~astropy.coordinates.AltAz` require Earth
+rotation information (UT1-UTC offset and/or polar motion) when transforming
+to/from other frames.  These Earth rotation values are automatically downloaded
+from the International Earth Rotation and Reference Systems (IERS) service when
+required.  See :ref:`utils-iers` for details of this process.
 
 Representation
 --------------
@@ -206,13 +205,29 @@ for a particular named object::
     <SkyCoord (ICRS): (ra, dec) in deg
         (83.82208, -5.39111)>
 
+For sites (primarily observatories) on the Earth, `astropy.coordinates` provides
+a similar quick way to get an `~astropy.coordinates.EarthLocation`::
+
+    >>> from astropy.coordinates import EarthLocation
+    >>> EarthLocation.of_site('Apache Point Observatory')  # doctest: +REMOTE_DATA +FLOAT_CMP
+    <EarthLocation (-1463969.3018517173, -5166673.342234327, 3434985.7120456537) m>
+
+To see the list of site names available, use
+:func:`astropy.coordinates.EarthLocation.get_site_names`.
+
 .. note::
+    `~astropy.coordinates.SkyCoord.from_name` and
+    `~astropy.coordinates.EarthLocation.of_site` are for convenience, and hence
+    are by design rather simple. If you need precise coordinates for an object
+    you should find the appropriate reference and input the coordinates
+    manually, or use more specialized functionality like that in the
+    `astroquery <http://www.astropy.org/astroquery/>`_ or
+    `astroplan <http://astroplan.readthedocs.io/>`_ affiliated packages.
 
-    `~astropy.coordinates.SkyCoord.from_name` is intended to be a convenience,
-    and is rather simple. If you need precise coordinates for an object you
-    should find the appropriate reference for that measurement and input the
-    coordinates manually.
-
+    Also note that these two methods retrieve data from the internet to
+    determine the celestial or Earth coordinates. The online data may be
+    updated, so if you need to guarantee that your scripts are reproducible
+    in the long term, see the :doc:`remote_methods` section.
 
 .. _astropy-coordinates-overview:
 
@@ -252,6 +267,11 @@ transformations to be defined or extended separately, while still
 preserving the high-level capabilities and simplicity of the |skycoord|
 class.
 
+.. topic:: Examples:
+
+    See :ref:`sphx_glr_generated_examples_coordinates_plot_obs-planning.py` for an
+    example of using the `~astropy.coordinates` functionality to prepare for an
+    observing run.
 
 Using `astropy.coordinates`
 ===========================
@@ -265,14 +285,14 @@ listed below.
    angles
    skycoord
    transforming
-   observing-example
+   solarsystem
    formatting
    matchsep
    representations
    frames
-   sgr-example
-   definitions
    galactocentric
+   remote_methods
+   definitions
 
 
 In addition, another resource for the capabilities of this package is the
@@ -284,57 +304,6 @@ IPython session::
 
     In [1]: from astropy.coordinates.tests import test_api_ape5
     In [2]: test_api_ape5??
-
-
-Migrating from pre-v0.4 coordinates
-===================================
-
-For typical users, the major change is that the recommended way to use
-coordinate functionality is via the `~astropy.coordinates.SkyCoord` class,
-instead of classes like `~astropy.coordinates.ICRS` classes (now called
-"frame classes").
-
-For most users of pre-v0.4 coordinates, this means that the best way to
-adapt old code to the new framework is to change code like::
-
-    >>> from astropy import units as u
-    >>> from astropy.coordinates import ICRS  # or FK5, or Galactic, or similar
-    >>> coordinate = ICRS(123.4*u.deg, 56.7*u.deg)
-
-to instead be::
-
-    >>> from astropy import units as u
-    >>> from astropy.coordinates import SkyCoord
-    >>> coordinate = SkyCoord(123.4*u.deg, 56.7*u.deg, frame='icrs')
-
-Note that usage like::
-
-    >>> coordinate = ICRS(123.4, 56.7, unit=('deg', 'deg'))  # NOT RECOMMENDED!
-
-will continue to work in v0.4, but will yield a `~astropy.coordinates.SkyCoord`
-instead of an `~astropy.coordinates.ICRS` object (the former behaves
-more like the pre-v0.4 `~astropy.coordinates.ICRS`).  This compatibility
-feature will issue a deprecation warning, and will be removed in the next major
-version, so you should update your code to use `~astropy.coordinates.SkyCoord`
-directly by the next release.
-
-Users should also be aware that if they continue to use the first form (directly
-creating `~astropy.coordinates.ICRS` frame objects), old code may still
-work if it uses basic coordinate functionality, but many of the
-convenience functions like catalog matching or attribute-based
-transforms like ``coordinate.galactic`` will no longer work.  These
-features are now all in `~astropy.coordinates.SkyCoord`.
-
-For advanced users or developers who have defined their own coordinates,
-take note that the extensive internal changes will require re-writing
-user-defined coordinate frames.  The :ref:`sgr-example` document has
-been updated for the new framework to provide a worked example of how
-custom coordinates work.
-
-More detailed information about the new framework and using it to define
-custom coordinates is available at :ref:`astropy-coordinates-overview`,
-:ref:`astropy-coordinates-definitions`, :ref:`astropy-coordinates-design`,
-and :ref:`astropy-coordinates-create-repr`.
 
 
 .. _astropy-coordinates-seealso:

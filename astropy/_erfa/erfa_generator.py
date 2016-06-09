@@ -15,14 +15,14 @@ from __future__ import absolute_import, division, print_function
 
 import re
 import os.path
-from astropy.utils.compat.odict import OrderedDict
+from collections import OrderedDict
 
 
 ctype_to_dtype = {'double'     : "numpy.double",
                   'int'        : "numpy.intc",
                   'eraASTROM'  : "dt_eraASTROM",
                   'eraLDBODY'  : "dt_eraLDBODY",
-                  'char'       : "numpy.dtype('S16')",
+                  'char'       : "numpy.dtype('S1')",
                   'const char' : "numpy.dtype('S16')",
                   }
 
@@ -395,7 +395,9 @@ def main(srcdir, outfn, templateloc, verbose=True):
                                               erfa_h, flags=re.DOTALL|re.MULTILINE)
     for section, subsection, functions in section_subsection_functions:
         print_("{0}.{1}".format(section, subsection))
-        if section == "Astronomy":
+        if ((section == "Astronomy") or (subsection == "AngleOps")
+            or (subsection == "SphericalCartesian")
+            or (subsection == "MatrixVectorProducts")):
             func_names = re.findall(' (\w+)\(.*?\);', functions, flags=re.DOTALL)
             for name in func_names:
                 print_("{0}.{1}.{2}...".format(section, subsection, name))

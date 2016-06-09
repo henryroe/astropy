@@ -6,13 +6,11 @@ from __future__ import (absolute_import, division, print_function,
 import copy
 import time
 import sys
-
-from ...utils.compat import argparse
+import argparse
 
 from ... import log, __version__
 
 from .constants import SSL_SUPPORT
-from .errors import SAMPHubError
 from .hub import SAMPHubServer
 
 if SSL_SUPPORT:

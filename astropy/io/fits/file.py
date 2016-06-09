@@ -9,6 +9,7 @@ import tempfile
 import warnings
 import zipfile
 import bz2
+import gzip
 
 from functools import reduce
 
@@ -17,10 +18,8 @@ from numpy import memmap as Memmap
 
 from .util import (isreadable, iswritable, isfile, fileobj_open, fileobj_name,
                    fileobj_closed, fileobj_mode, _array_from_file,
-                   _array_to_file, _write_string, _GZIP_FILE_TYPES)
+                   _array_to_file, _write_string)
 from ...extern.six import b, string_types
-from ...extern.six.moves import urllib
-from ...utils.compat import gzip
 from ...utils.data import download_file, _is_url
 from ...utils.decorators import classproperty
 from ...utils.exceptions import AstropyUserWarning
@@ -75,6 +74,13 @@ GZIP_MAGIC = b('\x1f\x8b\x08')
 PKZIP_MAGIC = b('\x50\x4b\x03\x04')
 BZIP2_MAGIC = b('\x42\x5a')
 
+try:
+    import pathlib
+except:
+    HAS_PATHLIB = False
+else:
+    HAS_PATHLIB = True
+
 class _File(object):
     """
     Represents a FITS file on disk (or in some other file-like object).
@@ -98,6 +104,9 @@ class _File(object):
             return
         else:
             self.simulateonly = False
+            # If fileobj is of type pathlib.Path
+            if HAS_PATHLIB and isinstance(fileobj, pathlib.Path):
+                fileobj = str(fileobj)
 
         # Holds mmap instance for files that use mmap
         self._mmap = None
@@ -117,7 +126,7 @@ class _File(object):
         if (isinstance(fileobj, string_types) and
             mode not in ('ostream', 'append') and
             _is_url(fileobj)): # This is an URL.
-                self.name = download_file(fileobj, cache=cache)
+            self.name = download_file(fileobj, cache=cache)
         else:
             self.name = fileobj_name(fileobj)
 
@@ -144,7 +153,7 @@ class _File(object):
 
         self.fileobj_mode = fileobj_mode(self._file)
 
-        if isinstance(fileobj, _GZIP_FILE_TYPES):
+        if isinstance(fileobj, gzip.GzipFile):
             self.compression = 'gzip'
         elif isinstance(fileobj, zipfile.ZipFile):
             # Reading from zip files is supported but not writing (yet)
@@ -311,7 +320,7 @@ class _File(object):
         # present, we implement our own support for it here
         if not hasattr(self._file, 'seek'):
             return
-        if isinstance(self._file, _GZIP_FILE_TYPES):
+        if isinstance(self._file, gzip.GzipFile):
             if whence:
                 if whence == 1:
                     offset = self._file.offset + offset
@@ -576,4 +585,4 @@ def _is_random_access_file_backed(fileobj):
     from an already opened `zipfile.ZipFile` object.
     """
 
-    return isfile(fileobj) or isinstance(fileobj, _GZIP_FILE_TYPES)
+    return isfile(fileobj) or isinstance(fileobj, gzip.GzipFile)

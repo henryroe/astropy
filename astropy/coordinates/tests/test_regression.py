@@ -12,10 +12,12 @@ from __future__ import (absolute_import, division, print_function,
 import numpy as np
 
 from ... import units as u
-from .. import AltAz, EarthLocation, SkyCoord, get_sun, ICRS
+from .. import AltAz, EarthLocation, SkyCoord, get_sun, ICRS, CIRS, ITRS
 from ...time import Time
+from ...utils import iers
 
-from ...tests.helper import assert_quantity_allclose
+from ...tests.helper import pytest, assert_quantity_allclose
+from .test_matching import HAS_SCIPY, OLDER_SCIPY
 
 
 def test_regression_3920():
@@ -110,3 +112,90 @@ def test_regression_4033():
     # in 4033, the following fail with a recursion error
     assert_quantity_allclose(de_wdistaa.separation(alb_wdistaa), 22.2862*u.deg, rtol=1e-3)
     assert_quantity_allclose(alb_wdistaa.separation(deaa), 22.2862*u.deg, rtol=1e-3)
+
+
+@pytest.mark.skipif(not HAS_SCIPY, reason='No Scipy')
+@pytest.mark.skipif(OLDER_SCIPY, reason='Scipy too old')
+def test_regression_4082():
+    """
+    Issue: https://github.com/astropy/astropy/issues/4082
+    """
+    from .. import search_around_sky, search_around_3d
+    cat = SkyCoord([10.076,10.00455], [18.54746, 18.54896], unit='deg')
+    search_around_sky(cat[0:1], cat, seplimit=u.arcsec * 60, storekdtree=False)
+    # in the issue, this raises a TypeError
+
+    #also check 3d for good measure, although it's not really affected by this bug directly
+    cat3d = SkyCoord([10.076,10.00455]*u.deg, [18.54746, 18.54896]*u.deg, distance=[0.1,1.5]*u.kpc)
+    search_around_3d(cat3d[0:1], cat3d, 1*u.kpc, storekdtree=False)
+
+
+def test_regression_4210():
+    """
+    Issue: https://github.com/astropy/astropy/issues/4210
+    Related PR with actual change: https://github.com/astropy/astropy/pull/4211
+    """
+    crd = SkyCoord(0*u.deg, 0*u.deg, distance=1*u.AU)
+    ecl = crd.geocentrictrueecliptic
+    # bug was that "lambda", which at the time was the name of the geocentric
+    # ecliptic longitude, is a reserved keyword. So this just makes sure the
+    # new name is are all valid
+    ecl.lon
+
+    # and for good measure, check the other ecliptic systems are all the same
+    # names for their attributes
+    from ..builtin_frames import ecliptic
+    for frame_name in ecliptic.__all__:
+        eclcls = getattr(ecliptic, frame_name)
+        eclobj = eclcls(1*u.deg, 2*u.deg, 3*u.AU)
+
+        eclobj.lat
+        eclobj.lon
+        eclobj.distance
+
+
+def test_regression_futuretimes_4302(recwarn):
+    """
+    Checks that an error is not raised for future times not covered by IERS
+    tables (at least in a simple transform like CIRS->ITRS that simply requires
+    the UTC<->UT1 conversion).
+
+    Relevant comment: https://github.com/astropy/astropy/pull/4302#discussion_r44836531
+    """
+    from ...utils.exceptions import AstropyWarning
+
+    # this is an ugly hack to get the warning to show up even if it has already
+    # appeared
+    from ..builtin_frames import utils
+    if hasattr(utils, '__warningregistry__'):
+        utils.__warningregistry__.clear()
+
+    future_time = Time('2511-5-1')
+
+    c = CIRS(1*u.deg, 2*u.deg, obstime=future_time)
+    c.transform_to(ITRS(obstime=future_time))
+
+    if not isinstance(iers.IERS_Auto.iers_table, iers.IERS_Auto):
+        saw_iers_warnings = False
+        for w in recwarn.list:
+            if issubclass(w.category, AstropyWarning):
+                if '(some) times are outside of range covered by IERS table' in str(w.message):
+                    saw_iers_warnings = True
+                    break
+        assert saw_iers_warnings, 'Never saw IERS warning'
+
+
+def test_regression_4996():
+    # this part is the actual regression test
+    deltat = np.linspace(-12, 12, 1000)*u.hour
+    times = Time('2012-7-13 00:00:00') + deltat
+    suncoo = get_sun(times)
+    assert suncoo.shape == (len(times),)
+
+    # and this is an additional test to make sure more complex arrays work
+    times2 = Time('2012-7-13 00:00:00') + deltat.reshape(10, 20, 5)
+    suncoo2 = get_sun(times2)
+    assert suncoo2.shape == times2.shape
+
+    # this is intentially not allclose - they should be *exactly* the same
+    assert np.all(suncoo.ra.ravel() == suncoo2.ra.ravel())

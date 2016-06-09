@@ -268,8 +268,11 @@ class TestQuantityMathFuncs(object):
 
     @pytest.mark.skipif("not hasattr(np, 'cbrt')")
     def test_cbrt_array(self):
-        assert np.all(np.cbrt(np.array([1., 8., 64.]) * u.m**3)
-                      == np.array([1., 2., 4.]) * u.m)
+        # Calculate cbrt on both sides since on Windows the cube root of 64
+        # does not exactly equal 4.  See 4388.
+        values = np.array([1., 8., 64.])
+        assert np.all(np.cbrt(values * u.m**3) ==
+                      np.cbrt(values) * u.m)
 
     def test_power_scalar(self):
         assert np.power(4. * u.m, 2.) == 16. * u.m ** 2
@@ -292,6 +295,27 @@ class TestQuantityMathFuncs(object):
     @raises(ValueError)
     def test_power_array_array2(self):
         np.power([2., 4.] * u.m, [2., 4.])
+
+    def test_power_array_array3(self):
+        # Identical unit fractions are converted automatically to dimensionless
+        # and should be allowed as base for np.power: #4764
+        q = [2., 4.] * u.m / u.m
+        powers = [2., 4.]
+        res = np.power(q, powers)
+        assert np.all(res.value == q.value ** powers)
+        assert res.unit == u.dimensionless_unscaled
+        # The same holds for unit fractions that are scaled dimensionless.
+        q2 = [2., 4.] * u.m / u.cm
+        # Test also against different types of exponent
+        for cls in (list, tuple, np.array, np.ma.array, u.Quantity):
+            res2 = np.power(q2, cls(powers))
+            assert np.all(res2.value == q2.to(1).value ** powers)
+            assert res2.unit == u.dimensionless_unscaled
+        # Though for single powers, we keep the composite unit.
+        res3 = q2 ** 2
+        assert np.all(res3.value == q2.value ** 2)
+        assert res3.unit == q2.unit ** 2
+        assert np.all(res3 == q2 ** [2, 2])
 
     def test_power_invalid(self):
         with pytest.raises(TypeError) as exc:
@@ -647,7 +671,7 @@ class TestInplaceUfuncs(object):
         a2 += (20.*u.km)
         assert a2.unit is u.m
         assert a2.dtype == np.float32
-        # For integer, in-place only workds if no conversion is done.
+        # For integer, in-place only works if no conversion is done.
         a3 = u.Quantity([1, 2, 3, 4], u.m, dtype=np.int32)
         a3 += u.Quantity(10, u.m, dtype=np.int64)
         assert a3.unit is u.m

@@ -1,3 +1,4 @@
+# Licensed under a 3-clause BSD style license - see LICENSE.rst
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 from ..extern import six
@@ -7,14 +8,19 @@ import platform
 import warnings
 
 import numpy as np
+from .index import get_index
 
 from ..utils.exceptions import AstropyUserWarning
 
 
 __all__ = ['TableGroups', 'ColumnGroups']
 
-
 def table_group_by(table, keys):
+    # index copies are unnecessary and slow down _table_group_by
+    with table.index_mode('discard_on_copy'):
+        return _table_group_by(table, keys)
+
+def _table_group_by(table, keys):
     """
     Get groups for ``table`` on specified ``keys``.
 
@@ -30,7 +36,6 @@ def table_group_by(table, keys):
     grouped_table : Table object with groups attr set accordingly
     """
     from .table import Table
-
     # Pre-convert string to tuple of strings, or Table to the underlying structured array
     if isinstance(keys, six.string_types):
         keys = (keys,)
@@ -58,7 +63,13 @@ def table_group_by(table, keys):
                         .format(type(keys)))
 
     try:
-        idx_sort = table_keys.argsort(kind='mergesort')
+        # take advantage of index internal sort if possible
+        table_index = get_index(table, table_keys) if \
+                      isinstance(table_keys, Table) else None
+        if table_index is not None:
+            idx_sort = table_index.sorted_data()
+        else:
+            idx_sort = table_keys.argsort(kind='mergesort')
         stable_sort = True
     except TypeError:
         # Some versions (likely 1.6 and earlier) of numpy don't support
@@ -117,7 +128,17 @@ def column_group_by(column, keys):
         raise ValueError('Input keys array length {0} does not match column length {1}'
                          .format(len(keys), len(column)))
 
-    idx_sort = keys.argsort()
+    # take advantage of table or column indices, if possible
+    index = None
+    if isinstance(keys, Table):
+        index = get_index(keys)
+    elif hasattr(keys, 'indices') and keys.indices:
+        index = keys.indices[0]
+
+    if index is not None:
+        idx_sort = index.sorted_data()
+    else:
+        idx_sort = keys.argsort()
     keys = keys[idx_sort]
 
     # Get all keys
@@ -161,7 +182,7 @@ class BaseGroups(object):
     def __getitem__(self, item):
         parent = self.parent
 
-        if isinstance(item, int):
+        if isinstance(item, (int, np.integer)):
             i0, i1 = self.indices[item], self.indices[item + 1]
             out = parent[i0:i1]
             out.groups._keys = parent.groups.keys[item]

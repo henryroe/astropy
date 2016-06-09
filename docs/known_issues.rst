@@ -99,6 +99,14 @@ An easy solution is::
     array([False], dtype=bool)
 
 
+Quantities in np.linspace failure on numpy 1.10
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+`~numpy.linspace` does not work correctly with quantities when using numpy
+1.10.0 to 1.10.5 due to a bug in numpy. The solution is to upgrade to numpy
+1.10.6 or later, in which the bug was fixed.
+
+
 Table sorting can silently fail on MacOS X or Windows with Python 3 and Numpy < 1.6.2
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -321,10 +329,10 @@ Displaying long docstrings that contain Unicode characters may fail on
 some platforms in the IPython console (prior to IPython version
 0.13.2)::
 
-    >>> import astropy.units as u
+    In [1]: import astropy.units as u
 
-    >>> u.Angstrom?
-    ERROR: UnicodeEncodeError: 'ascii' codec can't encode character u'\xe5' in
+    In [2]: u.Angstrom?
+    Out[2]: ERROR: UnicodeEncodeError: 'ascii' codec can't encode character u'\xe5' in
     position 184: ordinal not in range(128) [IPython.core.page]
 
 This can be worked around by changing the default encoding to ``utf-8``

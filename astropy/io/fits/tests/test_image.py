@@ -4,6 +4,7 @@ from __future__ import division, with_statement
 
 import math
 import os
+import re
 import time
 import warnings
 
@@ -12,12 +13,11 @@ import numpy as np
 from ....io import fits
 from ....utils.exceptions import (AstropyDeprecationWarning,
                                   AstropyPendingDeprecationWarning)
-from ....tests.helper import pytest, raises, catch_warnings
+from ....tests.helper import pytest, raises, catch_warnings, ignore_warnings
 from ..hdu.compressed import SUBTRACTIVE_DITHER_1, DITHER_SEED_CHECKSUM
 from .test_table import comparerecords
 
 from . import FitsTestCase
-from .util import ignore_warnings
 
 
 class TestImageFunctions(FitsTestCase):
@@ -688,7 +688,7 @@ class TestImageFunctions(FitsTestCase):
         hdu = fits.PrimaryHDU(data=arr)
         hdu.scale('int16', bscale=1.23)
 
-        # Creating data that uses BLANK is currently kludgy--a speparate issue
+        # Creating data that uses BLANK is currently kludgy--a separate issue
         # TODO: Rewrite this test when scaling with blank support is better
         # supported
 
@@ -1266,8 +1266,8 @@ class TestCompressedImage(FitsTestCase):
 
         with fits.open(self.temp('test.fits'),
                        disable_image_compression=True) as h:
-            assert h[1].header['TFORM1'] == '1PB(30)'
-            assert h[1].header['TFORM2'] == '1PB(359)'
+            assert re.match(r'^1PB\(\d+\)$', h[1].header['TFORM1'])
+            assert re.match(r'^1PB\(\d+\)$', h[1].header['TFORM2'])
 
     def test_compression_update_header(self):
         """Regression test for

@@ -5,7 +5,6 @@
 World Coordinate System (`astropy.wcs`)
 ***************************************
 
-.. _wcslib: http://www.atnf.csiro.au/~mcalabre/WCS/
 .. _FITS WCS standard: http://fits.gsfc.nasa.gov/fits_wcs.html
 .. _distortion paper: http://www.atnf.csiro.au/people/mcalabre/WCS/dcs_20040422.pdf
 .. _SIP: http://irsa.ipac.caltech.edu/data/SPITZER/docs/files/spitzer/shupeADASS.pdf
@@ -230,21 +229,21 @@ area can be extracted with the utility function
 Matplotlib plots with correct WCS projection
 ============================================
 
-The `WCSAxes <http://wcsaxes.readthedocs.org>`_ affiliated package adds the
+The `WCSAxes <http://wcsaxes.readthedocs.io>`_ affiliated package adds the
 ability to use the :class:`~astropy.wcs.WCS` to define projections in
 Matplotlib. More information on installing and using WCSAxes can be found `here
-<http://wcsaxes.readthedocs.org>`__.
+<http://wcsaxes.readthedocs.io>`__.
 
 .. plot::
     :include-source:
 
-    from matplotlib import rcParams, pyplot as plt
+    from matplotlib import pyplot as plt
     from astropy.io import fits
     from astropy.wcs import WCS
     from astropy.utils.data import download_file
 
     fits_file = 'http://data.astropy.org/tutorials/FITS-images/HorseHead.fits'
-    image_file = download_file(fits_file, cache=True )
+    image_file = download_file(fits_file, cache=True)
     hdu = fits.open(image_file)[0]
     wcs = WCS(hdu.header)
 

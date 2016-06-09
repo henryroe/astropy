@@ -117,7 +117,7 @@ cdef class FileString:
     cdef:
         object fhandle
         object mmap
-        void *mmap_ptr
+        const void *mmap_ptr
         Py_buffer buf
 
     def __cinit__(self, fname):
@@ -168,6 +168,7 @@ cdef class CParser:
     cdef:
         tokenizer_t *tokenizer
         object names
+        object header_names
         int data_start
         object data_end
         object include_names
@@ -300,17 +301,14 @@ cdef class CParser:
     def read_header(self):
         self.tokenizer.source_pos = 0
 
-        if self.names:
-            self.width = len(self.names)
-
         # header_start is a valid line number
-        elif self.header_start is not None and self.header_start >= 0:
+        if self.header_start is not None and self.header_start >= 0:
             if skip_lines(self.tokenizer, self.header_start, 1) != 0:
                 self.raise_error("an error occurred while advancing to the "
                                  "first header line")
             if tokenize(self.tokenizer, -1, 1, 0) != 0:
                 self.raise_error("an error occurred while tokenizing the header line")
-            self.names = []
+            self.header_names = []
             name = ''
 
             for i in range(self.tokenizer.output_len[0]): # header is in first col string
@@ -318,13 +316,13 @@ cdef class CParser:
                 if not c: # zero byte -- field terminator
                     if name:
                         # replace empty placeholder with ''
-                        self.names.append(name.replace('\x01', ''))
+                        self.header_names.append(name.replace('\x01', ''))
                         name = ''
                     else:
                         break # end of string
                 else:
                     name += chr(c)
-            self.width = len(self.names)
+            self.width = len(self.header_names)
 
         else:
             # Get number of columns from first data row
@@ -343,7 +341,12 @@ cdef class CParser:
                 raise core.InconsistentTableError('No data lines found, C reader '
                                             'cannot autogenerate column names')
             # auto-generate names
-            self.names = ['col{0}'.format(i + 1) for i in range(self.width)]
+            self.header_names = ['col{0}'.format(i + 1) for i in range(self.width)]
+
+        if self.names:
+            self.width = len(self.names)
+        else:
+            self.names = self.header_names
 
         # self.use_cols should only contain columns included in output
         self.use_cols = set(self.names)
@@ -738,6 +741,9 @@ cdef class CParser:
     def set_names(self, names):
         self.names = names
 
+    def get_header_names(self):
+        return self.header_names
+
     def __reduce__(self):
         cdef bytes source_ptr = self.source_ptr if self.source_ptr else b''
         return (_copy_cparser, (source_ptr, self.source_bytes, self.use_cols, self.fill_names,
@@ -899,11 +905,15 @@ cdef class FastWriter:
 
         for col in six.itervalues(table.columns):
             if col.name in self.use_names: # iterate over included columns
-                if col.format is None:
+                # If col.format is None then don't use any formatter to improve
+                # speed.  However, if the column is a byte string and this
+                # is Py3, then use the default formatter (which in this case
+                # does val.decode('utf-8')) in order to avoid a leading 'b'.
+                if col.format is None and not (six.PY3 and col.dtype.kind == 'S'):
                     self.format_funcs.append(None)
                 else:
-                    self.format_funcs.append(pprint._format_funcs.get(col.format,
-                                                            auto_format_func))
+                    self.format_funcs.append(pprint._format_funcs.get(
+                        col.format, pprint._auto_format_func))
                 # col is a numpy.ndarray, so we convert it to
                 # an ordinary list because csv.writer will call
                 # np.array_str() on each numpy value, which is
@@ -942,13 +952,13 @@ cdef class FastWriter:
         if not hasattr(output, 'write'): # output is a filename
             output = open(output, 'w')
             opened_file = True # remember to close file afterwards
-        writer = csv.writer(output,
-                            delimiter=self.delimiter,
-                            doublequote=True,
-                            escapechar=None,
-                            quotechar=self.quotechar,
-                            quoting=csv.QUOTE_MINIMAL,
-                            lineterminator=os.linesep)
+        writer = core.CsvWriter(output,
+                                delimiter=self.delimiter,
+                                doublequote=True,
+                                escapechar=None,
+                                quotechar=self.quotechar,
+                                quoting=csv.QUOTE_MINIMAL,
+                                lineterminator=os.linesep)
         self._write_header(output, writer, header_output, output_types)
 
         # Split rows into N-sized chunks, since we don't want to
@@ -1038,38 +1048,3 @@ def get_fill_values(fill_values, read=True):
         return (fill_values, fill_empty)
     else:
         return fill_values # cache for empty values doesn't matter for writing
-
-def auto_format_func(format_, val):
-    """
-    Mimics pprint._auto_format_func for non-numpy values.
-    """
-    if six.callable(format_):
-        format_func = lambda format_, val: format_(val)
-        try:
-            out = format_func(format_, val)
-            if not isinstance(out, six.string_types):
-                raise ValueError('Format function for value {0} returned {1} instead of string type'
-                                 .format(val, type(val)))
-        except Exception as err:
-            raise ValueError('Format function for value {0} failed: {1}'
-                             .format(val, err))
-    else:
-        try:
-            # Convert val to Python object with tolist().  See
-            # https://github.com/astropy/astropy/issues/148#issuecomment-3930809
-            out = format_.format(val)
-            # Require that the format statement actually did something
-            if out == format_:
-                raise ValueError
-            format_func = lambda format_, val: format_.format(val)
-        except:  # Not sure what exceptions might be raised
-            try:
-                out = format_ % val
-                if out == format_:
-                    raise ValueError
-                format_func = lambda format_, val: format_ % val
-            except:
-                raise ValueError('Unable to parse format string {0}'
-                                 .format(format_))
-    pprint._format_funcs[format_] = format_func
-    return out

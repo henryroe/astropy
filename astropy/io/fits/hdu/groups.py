@@ -186,14 +186,14 @@ class GroupData(FITS_rec):
                 # TODO: Find a better way to do this than using this interface
                 scale, zero = self._get_scale_factors(column)[3:5]
                 if scale or zero:
-                    self._converted[name] = pardata[idx]
+                    self._cache_field(name, pardata[idx])
                 else:
                     np.rec.recarray.field(self, idx)[:] = pardata[idx]
 
             column = coldefs[self._data_field]
             scale, zero = self._get_scale_factors(column)[3:5]
             if scale or zero:
-                self._converted[self._data_field] = input
+                self._cache_field(self._data_field, input)
             else:
                 np.rec.recarray.field(self, npars)[:] = input
         else:
@@ -279,7 +279,7 @@ class GroupsHDU(PrimaryHDU, _TableLikeHDU):
     def match_header(cls, header):
         keyword = header.cards[0].keyword
         return (keyword == 'SIMPLE' and 'GROUPS' in header and
-                header['GROUPS'] == True)
+                header['GROUPS'] is True)
 
     @lazyproperty
     def data(self):
@@ -355,6 +355,10 @@ class GroupsHDU(PrimaryHDU, _TableLikeHDU):
     def _theap(self):
         # Only really a lazyproperty for symmetry with _TableBaseHDU
         return 0
+
+    @property
+    def is_image(self):
+        return False
 
     @property
     def size(self):
@@ -503,7 +507,7 @@ class GroupsHDU(PrimaryHDU, _TableLikeHDU):
 
         self.req_cards('GCOUNT', pos, _is_int, 1, option, errs)
         self.req_cards('PCOUNT', pos, _is_int, 0, option, errs)
-        self.req_cards('GROUPS', pos, lambda v: (v == True), True, option,
+        self.req_cards('GROUPS', pos, lambda v: (v is True), True, option,
                        errs)
         return errs
 
@@ -516,6 +520,8 @@ class GroupsHDU(PrimaryHDU, _TableLikeHDU):
             # We have the data to be used.
             # Check the byte order of the data.  If it is little endian we
             # must swap it before calculating the datasum.
+            # TODO: Maybe check this on a per-field basis instead of assuming
+            # that all fields have the same byte order?
             byteorder = \
                 self.data.dtype.fields[self.data.dtype.names[0]][0].str[0]
 
@@ -527,8 +533,9 @@ class GroupsHDU(PrimaryHDU, _TableLikeHDU):
                 byteswapped = False
                 d = self.data
 
-            cs = self._compute_checksum(d.flatten().view(np.uint8),
-                                        blocking=blocking)
+            byte_data = d.view(type=np.ndarray, dtype=np.ubyte)
+
+            cs = self._compute_checksum(byte_data, blocking=blocking)
 
             # If the data was byteswapped in this method then return it to
             # its original little-endian order.

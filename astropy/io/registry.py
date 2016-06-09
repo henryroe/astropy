@@ -5,16 +5,16 @@ from __future__ import (absolute_import, division, print_function,
 
 import re
 import sys
+from collections import OrderedDict
 
 import numpy as np
 
-from ..utils import OrderedDict
 from ..extern import six
 from ..extern.six.moves import zip
 
 __all__ = ['register_reader', 'register_writer', 'register_identifier',
            'identify_format', 'get_reader', 'get_writer', 'read', 'write',
-           'get_formats']
+           'get_formats', 'IORegistryError']
 
 
 __doctest_skip__ = ['register_identifier']
@@ -23,6 +23,21 @@ __doctest_skip__ = ['register_identifier']
 _readers = OrderedDict()
 _writers = OrderedDict()
 _identifiers = OrderedDict()
+
+PATH_TYPES = six.string_types
+try:
+    import pathlib
+except:
+    HAS_PATHLIB = False
+else:
+    HAS_PATHLIB = True
+    PATH_TYPES += (pathlib.Path,)
+
+
+class IORegistryError(Exception):
+    """Custom error for registry clashes
+    """
+    pass
 
 
 def get_formats(data_class=None):
@@ -155,9 +170,9 @@ def register_reader(data_format, data_class, function, force=False):
     if not (data_format, data_class) in _readers or force:
         _readers[(data_format, data_class)] = function
     else:
-        raise Exception("Reader for format '{0}' and class '{1}' is "
-                        'already defined'.format(data_format,
-                                                 data_class.__name__))
+        raise IORegistryError("Reader for format '{0}' and class '{1}' is "
+                              'already defined'.format(data_format,
+                                                       data_class.__name__))
 
     _update__doc__(data_class, 'read')
 
@@ -182,9 +197,9 @@ def register_writer(data_format, data_class, function, force=False):
     if not (data_format, data_class) in _writers or force:
         _writers[(data_format, data_class)] = function
     else:
-        raise Exception("Writer for format '{0}' and class '{1}' is "
-                        'already defined'.format(data_format,
-                                                 data_class.__name__))
+        raise IORegistryError("Writer for format '{0}' and class '{1}' is "
+                              'already defined'.format(data_format,
+                                                       data_class.__name__))
 
     _update__doc__(data_class, 'write')
 
@@ -238,9 +253,9 @@ def register_identifier(data_format, data_class, identifier, force=False):
     if not (data_format, data_class) in _identifiers or force:
         _identifiers[(data_format, data_class)] = identifier
     else:
-        raise Exception("Identifier for format '{0}' and class '{1}' is "
-                        'already defined'.format(data_format,
-                                                 data_class.__name__))
+        raise IORegistryError("Identifier for format '{0}' and class '{1}' is "
+                              'already defined'.format(data_format,
+                                                       data_class.__name__))
 
 
 def identify_format(origin, data_class_required, path, fileobj, args, kwargs):
@@ -273,10 +288,10 @@ def get_reader(data_format, data_class):
             return _readers[(reader_format, reader_class)]
     else:
         format_table_str = _get_format_table_str(data_class, 'Read')
-        raise Exception("No reader defined for format '{0}' and class '{1}'.\n"
-                        'The available formats are:\n'
-                        '{2}'
-                        .format(data_format, data_class.__name__, format_table_str))
+        raise IORegistryError(
+            "No reader defined for format '{0}' and class '{1}'.\nThe "
+            "available formats are:\n{2}".format(
+                data_format, data_class.__name__, format_table_str))
 
 
 def get_writer(data_format, data_class):
@@ -286,10 +301,10 @@ def get_writer(data_format, data_class):
             return _writers[(writer_format, writer_class)]
     else:
         format_table_str = _get_format_table_str(data_class, 'Write')
-        raise Exception("No writer defined for format '{0}' and class '{1}'.\n"
-                        'The available formats are:\n'
-                        '{2}'
-                        .format(data_format, data_class.__name__, format_table_str))
+        raise IORegistryError(
+            "No writer defined for format '{0}' and class '{1}'.\nThe "
+            "available formats are:\n{2}".format(
+                data_format, data_class.__name__, format_table_str))
 
 
 def read(cls, *args, **kwargs):
@@ -311,12 +326,18 @@ def read(cls, *args, **kwargs):
             fileobj = None
 
             if len(args):
-                if isinstance(args[0], six.string_types):
+                if isinstance(args[0], PATH_TYPES):
                     from ..utils.data import get_readable_fileobj
+                    # path might be a pathlib.Path object if HAS_PATHLIB,
+                    # so coerce to a regular string.
+                    if HAS_PATHLIB and isinstance(args[0], pathlib.Path):
+                        args = (str(args[0]),) + args[1:]
                     path = args[0]
                     try:
                         ctx = get_readable_fileobj(args[0], encoding='binary')
                         fileobj = ctx.__enter__()
+                    except IOError:
+                        raise
                     except Exception:
                         fileobj = None
                     else:
@@ -366,7 +387,11 @@ def write(data, *args, **kwargs):
         path = None
         fileobj = None
         if len(args):
-            if isinstance(args[0], six.string_types):
+            if isinstance(args[0], PATH_TYPES):
+                # path might be a pathlib.Path object if HAS_PATHLIB,
+                # so coerce to a regular string.
+                if HAS_PATHLIB and isinstance(args[0], pathlib.Path):
+                    args = (str(args[0]),) + args[1:]
                 path = args[0]
                 fileobj = None
             elif hasattr(args[0], 'read'):
@@ -409,11 +434,11 @@ def _get_valid_format(mode, cls, path, fileobj, args, kwargs):
 
     if len(valid_formats) == 0:
         format_table_str = _get_format_table_str(cls, mode.capitalize())
-        raise Exception("Format could not be identified.\n"
+        raise IORegistryError("Format could not be identified.\n"
                         "The available formats are:\n"
                         "{0}".format(format_table_str))
     elif len(valid_formats) > 1:
-        raise Exception(
+        raise IORegistryError(
             "Format is ambiguous - options are: {0}".format(
                 ', '.join(sorted(valid_formats, key=lambda tup: tup[0]))))
 

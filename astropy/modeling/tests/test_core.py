@@ -3,14 +3,15 @@
 from __future__ import (absolute_import, unicode_literals, division,
                         print_function)
 
-import pytest
 import numpy as np
 from numpy.testing.utils import assert_allclose
-from ..core import Model, InputParameterError, custom_model, render_model
+from ..core import Model, InputParameterError, custom_model
 from ..parameters import Parameter
 from .. import models
 
+from ...tests.helper import pytest, catch_warnings
 from ...utils.compat.funcsigs import signature
+from ...utils.exceptions import AstropyDeprecationWarning
 
 
 class NonFittableModel(Model):
@@ -44,12 +45,8 @@ def test_Model_instance_repr_and_str():
 
 
 def test_Model_array_parameter():
-    m = NonFittableModel([[42, 43], [1,2]])
-    m = NonFittableModel([42, 43, 44, 45])
-
-    phi, theta, psi = 42, 43, 44
-    model = models.RotateNative2Celestial(phi, theta, psi)
-    assert_allclose(model.param_sets, [[42], [43], [44]])
+    model = models.Gaussian1D(4, 2, 1)
+    assert_allclose(model.param_sets, [[4], [2], [1]])
 
 
 def test_inputless_model():
@@ -85,15 +82,6 @@ def test_inputless_model():
     m = TestModel(a=[[1, 2, 3], [4, 5, 6]], model_set_axis=0)
     assert len(m) == 2
     assert np.all(m() == [[1, 2, 3], [4, 5, 6]])
-
-
-def test_Model_add_model():
-    m = models.Gaussian1D(1,2,3)
-    m.add_model(m, 'p')
-    m.add_model(m, 's')
-    with pytest.raises(InputParameterError):
-        m.add_model(m, 'q')
-        m.add_model(m, 42)
 
 
 def test_ParametericModel():
@@ -200,50 +188,90 @@ def test_custom_inverse():
     assert_allclose(x, p(p.inverse(x)))
     assert_allclose(x, p.inverse(p(x)))
 
-    p.inverse = None
+    with catch_warnings(AstropyDeprecationWarning) as w:
+        p.inverse = None
+
+    # TODO: This can be removed after Astropy v1.1 or so
+    assert len(w) == 1
 
     with pytest.raises(NotImplementedError):
         p.inverse
 
 
-def test_render_model_2d():
+def test_custom_inverse_reset():
+    """Test resetting a custom inverse to the model's default inverse."""
 
+    class TestModel(Model):
+        inputs = ()
+        outputs = ('y',)
+        @property
+        def inverse(self):
+            return models.Shift()
+
+        @staticmethod
+        def evaluate():
+            return 0
+
+    # The above test model has no meaning, nor does its inverse--this just
+    # tests that setting an inverse and resetting to the default inverse works
+
+    m = TestModel()
+    assert isinstance(m.inverse, models.Shift)
+
+    m.inverse = models.Scale()
+    assert isinstance(m.inverse, models.Scale)
+
+    del m.inverse
+    assert isinstance(m.inverse, models.Shift)
+
+
+def test_render_model_2d():
     imshape = (71, 141)
     image = np.zeros(imshape)
     coords = y, x = np.indices(imshape)
 
-    model = models.Gaussian2D(x_stddev=6.1, y_stddev=3.9, theta=np.pi / 4)
+    model = models.Gaussian2D(x_stddev=6.1, y_stddev=3.9, theta=np.pi / 3)
 
     # test points for edges
     ye, xe = [0, 35, 70], [0, 70, 140]
     # test points for floating point positions
     yf, xf = [35.1, 35.5, 35.9], [70.1, 70.5, 70.9]
 
-    test_pts = [(a, b) for a in xe for b in ye] + [(a, b) for a in xf for b in yf]
+    test_pts = [(a, b) for a in xe for b in ye]
+    test_pts += [(a, b) for a in xf for b in yf]
 
     for x0, y0 in test_pts:
         model.x_mean = x0
         model.y_mean = y0
         expected = model(x, y)
-        for im in [image, None]:
-            for xy in [coords, None]:
+        for xy in [coords, None]:
+            for im in [image.copy(), None]:
                 if (im is None) & (xy is None):
                     # this case is tested in Fittable2DModelTester
                     continue
-                actual = render_model(model, arr=image, coords=xy)
+                actual = model.render(out=im, coords=xy)
+                if im is None:
+                    assert_allclose(actual, model.render(coords=xy))
                 # assert images match
-                assert_allclose(expected, actual, atol=2e-7)
-                # assert flux conserved
-                assert ((np.sum(expected) - np.sum(actual)) / np.sum(expected)) < 1e-7
+                assert_allclose(expected, actual, atol=3e-7)
+                # assert model fully captured
+                if (x0, y0) == (70, 35):
+                    boxed = model.render()
+                    flux = np.sum(expected)
+                    assert ((flux - np.sum(boxed)) / flux) < 1e-7
+    # test an error is raised when the bounding box is larger than the input array
+    try:
+        actual = model.render(out=np.zeros((1, 1)))
+    except ValueError:
+        pass
 
 
 def test_render_model_1d():
-
     npix = 101
     image = np.zeros(npix)
     coords = np.arange(npix)
 
-    model = models.Gaussian1D(stddev=49.5)
+    model = models.Gaussian1D()
 
     # test points
     test_pts = [0, 49.1, 49.5, 49.9, 100]
@@ -251,20 +279,23 @@ def test_render_model_1d():
     # test widths
     test_stdv = np.arange(5.5, 6.7, .2)
 
-    for x0, stdv in zip(test_pts, test_stdv):
+    for x0, stdv in [(p, s) for p in test_pts for s in test_stdv]:
         model.mean = x0
         model.stddev = stdv
         expected = model(coords)
-        for im in [image, None]:
-            for x in [coords, None]:
+        for x in [coords, None]:
+            for im in [image.copy(), None]:
                 if (im is None) & (x is None):
                     # this case is tested in Fittable1DModelTester
                     continue
-                actual = render_model(model, arr=image, coords=x)
+                actual = model.render(out=im, coords=x)
                 # assert images match
-                assert_allclose(expected, actual, atol=2e-7)
-                # assert flux conserved
-                assert ((np.sum(expected) - np.sum(actual)) / np.sum(expected)) < 1e-7
+                assert_allclose(expected, actual, atol=3e-7)
+                # assert model fully captured
+                if (x0, stdv) == (49.5, 5.5):
+                    boxed = model.render()
+                    flux = np.sum(expected)
+                    assert ((flux - np.sum(boxed)) / flux) < 1e-7
 
 
 def test_render_model_3d():
@@ -277,7 +308,12 @@ def test_render_model_3d():
         val = (rsq < 1) * amp
         return val
 
-    Ellipsoid3D = models.custom_model(ellipsoid)
+    class Ellipsoid3D(custom_model(ellipsoid)):
+        @property
+        def bounding_box(self):
+            return ((self.z0 - self.c, self.z0 + self.c),
+                    (self.y0 - self.b, self.y0 + self.b),
+                    (self.x0 - self.a, self.x0 + self.a))
 
     model = Ellipsoid3D()
 
@@ -289,17 +325,20 @@ def test_render_model_3d():
     test_pts = [(x, y, z) for x in xe for y in ye for z in ze]
     test_pts += [(x, y, z) for x in xf for y in yf for z in zf]
 
-    for x0, y0, z0 in [(8,10,13)]:#test_pts:
+    for x0, y0, z0 in test_pts:
         model.x0 = x0
         model.y0 = y0
         model.z0 = z0
         expected = model(*coords[::-1])
-        for im in [image, None]:
-            for c in [coords, None]:
+        for c in [coords, None]:
+            for im in [image.copy(), None]:
                 if (im is None) & (c is None):
                     continue
-                actual = render_model(model, arr=image, coords=c)
+                actual = model.render(out=im, coords=c)
+                boxed = model.render()
                 # assert images match
                 assert_allclose(expected, actual)
-                # assert flux conserved
-                assert ((np.sum(expected) - np.sum(actual)) / np.sum(expected)) == 0
+                # assert model fully captured
+                if (z0, y0, x0) == (8, 10, 13):
+                    boxed = model.render()
+                    assert (np.sum(expected) - np.sum(boxed)) == 0

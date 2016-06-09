@@ -12,31 +12,37 @@ import numpy as np
 from ... import units as u
 from ..baseframe import frame_transform_graph
 from ..transformations import FunctionTransform
-from ..representation import SphericalRepresentation, UnitSphericalRepresentation
+from ..representation import (SphericalRepresentation,
+                              UnitSphericalRepresentation)
 from ... import _erfa as erfa
 
 from .cirs import CIRS
 from .altaz import AltAz
-from .utils import get_polar_motion, get_dut1utc, PIOVER2
+from .utils import get_polar_motion, get_dut1utc, get_jd12, PIOVER2
 
 
 @frame_transform_graph.transform(FunctionTransform, CIRS, AltAz)
 def cirs_to_altaz(cirs_coo, altaz_frame):
-    if np.all(cirs_coo.obstime != altaz_frame.obstime):
+    if np.any(cirs_coo.obstime != altaz_frame.obstime):
         # the only frame attribute for the current CIRS is the obstime, but this
         # would need to be updated if a future change allowed specifying an
         # Earth location algorithm or something
         cirs_coo = cirs_coo.transform_to(CIRS(obstime=altaz_frame.obstime))
-    srepr = cirs_coo.represent_as(UnitSphericalRepresentation)
-    cirs_ra = srepr.lon.to(u.radian).value
-    cirs_dec = srepr.lat.to(u.radian).value
+
+    # we use the same obstime everywhere now that we know they're the same
+    obstime = cirs_coo.obstime
+
+    usrepr = cirs_coo.represent_as(UnitSphericalRepresentation)
+    cirs_ra = usrepr.lon.to(u.radian).value
+    cirs_dec = usrepr.lat.to(u.radian).value
 
     lon, lat, height = altaz_frame.location.to_geodetic('WGS84')
-    xp, yp = get_polar_motion(cirs_coo.obstime)
+    xp, yp = get_polar_motion(obstime)
 
-    #first set up the astrometry context for ICRS<->CIRS
-    astrom = erfa.apio13(cirs_coo.obstime.jd1, cirs_coo.obstime.jd2,
-                         get_dut1utc(cirs_coo.obstime),
+    #first set up the astrometry context for CIRS<->AltAz
+    jd1, jd2 = get_jd12(obstime, 'utc')
+    astrom = erfa.apio13(jd1, jd2,
+                         get_dut1utc(obstime),
                          lon.to(u.radian).value, lat.to(u.radian).value,
                          height.to(u.m).value,
                          xp, yp,  # polar motion
@@ -54,9 +60,10 @@ def cirs_to_altaz(cirs_coo, altaz_frame):
                                           lon=u.Quantity(az, u.radian, copy=False),
                                           copy=False)
     else:
-        #now we get the distance as just the cartesian
-        #distance from the earth location to the coordinate location
-        distance = altaz_frame.location.itrs.separation_3d(cirs_coo)
+        # now we get the distance as the cartesian distance from the earth
+        # location to the coordinate location
+        locitrs = altaz_frame.location.get_itrs(obstime)
+        distance = locitrs.separation_3d(cirs_coo)
         rep = SphericalRepresentation(lat=u.Quantity(PIOVER2 - zen, u.radian, copy=False),
                                       lon=u.Quantity(az, u.radian, copy=False),
                                       distance=distance,
@@ -66,15 +73,16 @@ def cirs_to_altaz(cirs_coo, altaz_frame):
 
 @frame_transform_graph.transform(FunctionTransform, AltAz, CIRS)
 def altaz_to_cirs(altaz_coo, cirs_frame):
-    srepr = altaz_coo.represent_as(UnitSphericalRepresentation)
-    az = srepr.lon.to(u.radian).value
-    zen = PIOVER2 - srepr.lat.to(u.radian).value
+    usrepr = altaz_coo.represent_as(UnitSphericalRepresentation)
+    az = usrepr.lon.to(u.radian).value
+    zen = PIOVER2 - usrepr.lat.to(u.radian).value
 
     lon, lat, height = altaz_coo.location.to_geodetic('WGS84')
     xp, yp = get_polar_motion(altaz_coo.obstime)
 
     #first set up the astrometry context for ICRS<->CIRS at the altaz_coo time
-    astrom = erfa.apio13(altaz_coo.obstime.jd1, altaz_coo.obstime.jd2,
+    jd1, jd2 = get_jd12(altaz_coo.obstime, 'utc')
+    astrom = erfa.apio13(jd1, jd2,
                          get_dut1utc(altaz_coo.obstime),
                          lon.to(u.radian).value, lat.to(u.radian).value,
                          height.to(u.m).value,
@@ -86,17 +94,32 @@ def altaz_to_cirs(altaz_coo, cirs_frame):
                          altaz_coo.obswl.value)
 
     # the 'A' indicates zen/az inputs
-    cirs_ra, cirs_dec = erfa.atoiq('A', az, zen, astrom)
+    cirs_ra, cirs_dec = erfa.atoiq('A', az, zen, astrom)*u.radian
 
     if isinstance(altaz_coo.data, UnitSphericalRepresentation):
         distance = None
     else:
-        #now we get the distance as just the cartesian
-        #distance from the earth location to the coordinate location
-        distance = altaz_coo.separation_3d(altaz_coo.location.itrs)
+        locitrs = altaz_coo.location.get_itrs(altaz_coo.obstime)
+
+        # To compute the distance in a way that is reversable with cirs_to_altaz
+        # we use basic trigonometry.  The altaz_coo's distance ("d") is one leg
+        # of a triangle, and the earth center -> EarthLocation distance ("r")
+        # is a neighboring leg.  We can also easily get the angle between the
+        # earth center->target (calculated above by apio13), and
+        # earth center->EarthLocation vectors.  This is a Side-Side-Angle
+        # situation, and the formula below is the trig formula to solve for
+        # the remaining side
+
+        ucirs = cirs_frame.realize_frame(UnitSphericalRepresentation(lon=cirs_ra, lat=cirs_dec))
+        delta = ucirs.separation(locitrs)
+        r = locitrs.spherical.distance
+        d = altaz_coo.distance
+
+        sindoverd = np.sin(delta) / d
+        distance = np.sin(delta + np.arcsin(r*sindoverd))/sindoverd
 
     #the final transform may be a no-op if the obstimes are the same
-    return CIRS(ra=cirs_ra*u.radian, dec=cirs_dec*u.radian, distance=distance,
+    return CIRS(ra=cirs_ra, dec=cirs_dec, distance=distance,
                 obstime=altaz_coo.obstime).transform_to(cirs_frame)
 
 

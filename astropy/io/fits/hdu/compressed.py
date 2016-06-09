@@ -22,7 +22,7 @@ from ..util import (_is_pseudo_unsigned, _unsigned_zero, _is_int,
 
 from ....extern.six import string_types, iteritems
 from ....utils import lazyproperty, deprecated
-from ....utils.compat import ignored
+from ....utils.compat import suppress
 from ....utils.exceptions import (AstropyPendingDeprecationWarning,
                                   AstropyUserWarning)
 
@@ -331,7 +331,7 @@ class CompImageHeader(Header):
 
         is_naxisn = False
         if keyword[:5] == 'NAXIS':
-            with ignored(ValueError):
+            with suppress(ValueError):
                 index = int(keyword[5:])
                 is_naxisn = index > 0
 
@@ -355,7 +355,7 @@ class CompImageHeader(Header):
         keyword, repeat = self._keyword_from_index(idx)
         remapped_insert_keyword = self._remap_keyword(keyword)
 
-        with ignored(IndexError, KeyError):
+        with suppress(IndexError, KeyError):
             idx = self._table_header._cardindex((remapped_insert_keyword,
                                                  repeat))
 
@@ -676,7 +676,7 @@ class CompImageHDU(BinTableHDU):
         if xtension not in ('BINTABLE', 'A3DTABLE'):
             return False
 
-        if 'ZIMAGE' not in header or header['ZIMAGE'] != True:
+        if 'ZIMAGE' not in header or not header['ZIMAGE']:
             return False
 
         if COMPRESSION_SUPPORTED and COMPRESSION_ENABLED:
@@ -781,7 +781,7 @@ class CompImageHDU(BinTableHDU):
             huge_hdu = False
 
         # Update the extension name in the table header
-        if not name and not 'EXTNAME' in self._header:
+        if not name and 'EXTNAME' not in self._header:
             name = 'COMPRESSED_IMAGE'
 
         if name:
@@ -1083,7 +1083,7 @@ class CompImageHDU(BinTableHDU):
             if tile_size and len(tile_size) >= idx + 1:
                 ts = tile_size[idx]
             else:
-                if not ztile in self._header:
+                if ztile not in self._header:
                     # Default tile size
                     if not idx:
                         ts = self._image_header['NAXIS1']
@@ -1773,7 +1773,7 @@ class CompImageHDU(BinTableHDU):
         else:
             # Delete from both headers
             for header in (self.header, self._header):
-                with ignored(KeyError):
+                with suppress(KeyError):
                     del header['BZERO']
 
         if _scale != 1:
@@ -1781,7 +1781,7 @@ class CompImageHDU(BinTableHDU):
             self.header['BSCALE'] = _scale
         else:
             for header in (self.header, self._header):
-                with ignored(KeyError):
+                with suppress(KeyError):
                     del header['BSCALE']
 
         if self.data.dtype.type != _type:
@@ -1910,7 +1910,7 @@ class CompImageHDU(BinTableHDU):
                 # Make sure to delete from both the image header and the table
                 # header; later this will be streamlined
                 for header in (self.header, self._header):
-                    with ignored(KeyError):
+                    with suppress(KeyError):
                         del header[keyword]
                         # Since _update_header_scale_info can, currently, be
                         # called *after* _prewriteto(), replace these with

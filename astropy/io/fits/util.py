@@ -2,7 +2,7 @@
 
 from __future__ import division
 
-import gzip as _system_gzip
+import gzip
 import itertools
 import io
 import mmap
@@ -34,13 +34,8 @@ from ...extern.six import (string_types, integer_types, text_type,
                            binary_type, next)
 from ...extern.six.moves import zip
 from ...utils import wraps
-from ...utils.compat import ignored
-from ...utils.compat import gzip as _astropy_gzip
+from ...utils.compat import suppress
 from ...utils.exceptions import AstropyUserWarning
-
-
-_GZIP_FILE_TYPES = (_astropy_gzip.GzipFile, _system_gzip.GzipFile)
-
 
 if six.PY3:
     cmp = lambda a, b: (a > b) - (a < b)
@@ -117,7 +112,7 @@ class NotifierMixin(object):
         if self._listeners is None:
             return
 
-        with ignored(KeyError):
+        with suppress(KeyError):
             del self._listeners[id(listener)]
 
     def _notify(self, notification, *args, **kwargs):
@@ -264,12 +259,6 @@ def ignore_sigint(func):
                     raise KeyboardInterrupt
 
     return wrapped
-
-
-def first(iterable):
-    """Returns the first element from an iterable."""
-
-    return next(iter(iterable))
 
 
 def pairwise(iterable):
@@ -423,7 +412,7 @@ def fileobj_name(f):
 
     if isinstance(f, string_types):
         return f
-    elif isinstance(f, _GZIP_FILE_TYPES):
+    elif isinstance(f, gzip.GzipFile):
         # The .name attribute on GzipFiles does not always represent the name
         # of the file being read/written--it can also represent the original
         # name of the file being compressed
@@ -491,11 +480,11 @@ def _fileobj_normalize_mode(f):
     # normalize it for them:
     mode = f.mode
 
-    if isinstance(f, _GZIP_FILE_TYPES):
+    if isinstance(f, gzip.GzipFile):
         # GzipFiles can be either readonly or writeonly
-        if mode == _system_gzip.READ:
+        if mode == gzip.READ:
             return 'rb'
-        elif mode == _system_gzip.WRITE:
+        elif mode == gzip.WRITE:
             return 'wb'
         else:
             # This shouldn't happen?
@@ -585,10 +574,18 @@ if sys.platform.startswith('win32'):
         if msvcrt_dll is None:
             # If for some reason the C runtime can't be located then we're dead
             # in the water.  Just return a dummy function
-            return _dummy_is_append_mode
-
-        msvcrt = cdll.LoadLibrary(msvcrt_dll)
-
+            try:
+                # Python3.5 uses msvc14 and it is "recommended" to use
+                # cdll.msvcrt directly. Not sure if that may cause problems.
+                # https://bugs.python.org/issue26727
+                msvcrt = cdll.msvcrt
+            except:
+                # TODO: This except probably should need some Exceptions to
+                # catch ... but since we return a Warning the user is likely
+                # to know that there is something wrong altogether.
+                return _dummy_is_append_mode
+        else:
+            msvcrt = cdll.LoadLibrary(msvcrt_dll)
 
         # Constants
         IOINFO_L2E = 5
@@ -596,7 +593,6 @@ if sys.platform.startswith('win32'):
         IOINFO_ARRAYS = 64
         FAPPEND = 0x20
         _NO_CONSOLE_FILENO = -2
-
 
         # Types
         intptr_t = POINTER(c_int)
@@ -630,7 +626,7 @@ if sys.platform.startswith('win32'):
         def _is_append_mode(fd):
             global _sizeof_ioinfo
             if fd != _NO_CONSOLE_FILENO:
-                idx1 = fd >> IOINFO_L2E # The index into the __pioinfo array
+                idx1 = fd >> IOINFO_L2E  # The index into the __pioinfo array
                 # The n-th ioinfo pointer in __pioinfo[idx1]
                 idx2 = fd & ((1 << IOINFO_L2E) - 1)
                 if 0 <= idx1 < IOINFO_ARRAYS and __pioinfo[idx1] is not None:
@@ -810,7 +806,7 @@ def _array_to_file(arr, outfile):
     # Write one chunk at a time for systems whose fwrite chokes on large
     # writes.
     idx = 0
-    arr = arr.view(type=np.ndarray).flatten()
+    arr = arr.view(np.ndarray).flatten()
     while idx < arr.nbytes:
         write(arr[idx:idx + chunksize], outfile)
         idx += chunksize
@@ -862,6 +858,7 @@ def _write_string(f, s):
     elif isinstance(f, StringIO) and isinstance(s, np.ndarray):
         # Workaround for StringIO/ndarray incompatibility
         s = s.data
+
     f.write(s)
 
 

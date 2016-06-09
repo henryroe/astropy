@@ -40,8 +40,10 @@ def get_package_data():
                                    't/daophot.dat',
                                    't/daophot2.dat',
                                    't/daophot3.dat',
+                                   't/daophot4.dat',
                                    't/sextractor.dat',
                                    't/sextractor2.dat',
+                                   't/sextractor3.dat',
                                    't/daophot.dat.gz',
                                    't/fill_values.txt',
                                    't/html.html',
@@ -52,6 +54,7 @@ def get_package_data():
                                    't/latex1.tex',
                                    't/latex1.tex.gz',
                                    't/latex2.tex',
+                                   't/latex3.tex',
                                    't/nls1_stackinfo.dbout',
                                    't/no_data_cds.dat',
                                    't/no_data_daophot.dat',
@@ -79,6 +82,8 @@ def get_package_data():
                                    't/simple_csv.csv',
                                    't/simple_csv_missing.csv',
                                    't/fixed_width_2_line.txt',
+                                   't/cds/description/ReadMe',
+                                   't/cds/description/table.dat',
                                    ]
     }
 

@@ -11,6 +11,7 @@
 #include "astropy_wcs/docstrings.h"
 
 #include "wcsfix.h"
+#include "wcshdr.h"
 #include "wcsprintf.h"
 #include "wcsunits.h"
 
@@ -37,14 +38,14 @@ _PyArrayProxy_New(
       nd, (npy_intp*)dims,
       NULL,
       (void*)data,
-      NPY_C_CONTIGUOUS | flags,
+      NPY_ARRAY_C_CONTIGUOUS | flags,
       NULL);
 
   if (result == NULL) {
     return NULL;
   }
   Py_INCREF(self);
-  PyArray_BASE(result) = (PyObject*)self;
+  PyArray_SetBaseObject((PyArrayObject *)result, self);
   return result;
 }
 
@@ -56,7 +57,7 @@ PyArrayProxy_New(
     int typenum,
     const void* data) {
 
-  return _PyArrayProxy_New(self, nd, dims, typenum, data, NPY_WRITEABLE);
+  return _PyArrayProxy_New(self, nd, dims, typenum, data, NPY_ARRAY_WRITEABLE);
 }
 
 /*@null@*/ PyObject*
@@ -352,6 +353,16 @@ wcserr_fix_to_python_exc(const struct wcserr *err) {
   }
 }
 
+void
+wcshdr_err_to_python_exc(int status) {
+  if (status > 0 && status != WCSHDRERR_PARSER) {
+    PyErr_SetString(PyExc_MemoryError, "Memory allocation error");
+  } else {
+    PyErr_SetString(PyExc_ValueError, "Internal error in wcslib header parser");
+  }
+}
+
+
 /***************************************************************************
   Property helpers
  ***************************************************************************/
@@ -527,7 +538,7 @@ set_double_array(
     return -1;
   }
 
-  value_array = (PyArrayObject*)PyArray_ContiguousFromAny(value, PyArray_DOUBLE,
+  value_array = (PyArrayObject*)PyArray_ContiguousFromAny(value, NPY_DOUBLE,
                                                           ndims, ndims);
   if (value_array == NULL) {
     return -1;
@@ -569,7 +580,7 @@ set_int_array(
     return -1;
   }
 
-  value_array = (PyArrayObject*)PyArray_ContiguousFromAny(value, PyArray_INT,
+  value_array = (PyArrayObject*)PyArray_ContiguousFromAny(value, NPY_INT,
                                                           ndims, ndims);
   if (value_array == NULL) {
     return -1;

@@ -20682,8 +20682,8 @@ char *wcsbthtext;
 #line 1 "wcsbth.l"
 /*============================================================================
 
-  WCSLIB 5.9 - an implementation of the FITS WCS standard.
-  Copyright (C) 1995-2015, Mark Calabretta
+  WCSLIB 5.14 - an implementation of the FITS WCS standard.
+  Copyright (C) 1995-2016, Mark Calabretta
 
   This file is part of WCSLIB.
 
@@ -20704,7 +20704,7 @@ char *wcsbthtext;
 
   Author: Mark Calabretta, Australia Telescope National Facility, CSIRO.
   http://www.atnf.csiro.au/people/Mark.Calabretta
-  $Id: wcsbth.c,v 5.9 2015/07/21 09:20:02 mcalabre Exp $
+  $Id: wcsbth.c,v 5.14 2016/02/07 10:49:31 mcalabre Exp $
 *=============================================================================
 *
 * wcsbth.l is a Flex description file containing the definition of a lexical

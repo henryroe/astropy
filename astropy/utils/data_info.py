@@ -1,6 +1,15 @@
 # -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
+"""This module contains functions and methods that relate to the DataInfo class
+which provides a container for informational attributes as well as summary info
+methods.
+
+A DataInfo object is attached to the Quantity, SkyCoord, and Time classes in
+astropy.  Here it allows those classes to be used in Tables and uniformly carry
+table column attributes such as name, format, dtype, meta, and description.
+"""
+
 # Note: these functions and classes are tested extensively in astropy table
 # tests via their use in providing mixin column info, and in
 # astropy/tests/test_info for providing table and column info summary data.
@@ -15,11 +24,10 @@ import numpy as np
 from functools import partial
 import warnings
 import re
+from collections import OrderedDict
 
 from ..extern import six
-from ..utils import OrderedDict
 from ..utils.compat import NUMPY_LT_1_8
-
 
 # Tuple of filterwarnings kwargs to ignore when calling info
 IGNORE_WARNINGS = (dict(category=RuntimeWarning,
@@ -375,7 +383,7 @@ class BaseColumnInfo(DataInfo):
     Note that this class is defined here so that mixins can use it
     without importing the table package.
     """
-    attr_names = DataInfo.attr_names.union(['parent_table'])
+    attr_names = DataInfo.attr_names.union(['parent_table', 'indices'])
     _attrs_no_copy = set(['parent_table'])
 
     def iter_str_vals(self):
@@ -391,6 +399,87 @@ class BaseColumnInfo(DataInfo):
         _pformat_col_iter = formatter._pformat_col_iter
         for str_val in _pformat_col_iter(col, -1, False, False, {}):
             yield str_val
+
+    def adjust_indices(self, index, value, col_len):
+        '''
+        Adjust info indices after column modification.
+
+        Parameters
+        ----------
+        index : slice, int, list, or ndarray
+            Element(s) of column to modify. This parameter can
+            be a single row number, a list of row numbers, an
+            ndarray of row numbers, a boolean ndarray (a mask),
+            or a column slice.
+        value : int, list, or ndarray
+            New value(s) to insert
+        col_len : int
+            Length of the column
+        '''
+        if not self.indices:
+            return
+
+        if isinstance(index, slice):
+            # run through each key in slice
+            t = index.indices(col_len)
+            keys = list(range(*t))
+        elif isinstance(index, np.ndarray) and index.dtype.kind == 'b':
+            # boolean mask
+            keys = np.where(index)[0]
+        else: # single int
+            keys = [index]
+
+        value = np.atleast_1d(value) # turn array(x) into array([x])
+        if value.size == 1:
+            # repeat single value
+            value = list(value) * len(keys)
+
+        for key, val in zip(keys, value):
+            for col_index in self.indices:
+                col_index.replace(key, self.name, val)
+
+    def slice_indices(self, col_slice, item, col_len):
+        '''
+        Given a sliced object, modify its indices
+        to correctly represent the slice.
+
+        Parameters
+        ----------
+        col_slice : Column or mixin
+            Sliced object
+        item : slice, list, or ndarray
+            Slice used to create col_slice
+        col_len : int
+            Length of original object
+        '''
+        from ..table.sorted_array import SortedArray
+        if not getattr(self, '_copy_indices', True):
+            # Necessary because MaskedArray will perform a shallow copy
+            col_slice.info.indices = []
+            return col_slice
+        elif isinstance(item, slice):
+            col_slice.info.indices = [x[item] for x in self.indices]
+        elif self.indices:
+            if isinstance(item, np.ndarray) and item.dtype.kind == 'b':
+                # boolean mask
+                item = np.where(item)[0]
+            threshold = 0.6
+            # Empirical testing suggests that recreating a BST/RBT index is
+            # more effective than relabelling when less than ~60% of
+            # the total number of rows are involved, and is in general
+            # more effective for SortedArray.
+            small = len(item) <= 0.6 * col_len
+            col_slice.info.indices = []
+            for index in self.indices:
+                if small or isinstance(index, SortedArray):
+                    new_index = index.get_slice(col_slice, item)
+                else:
+                    new_index = deepcopy(index)
+                    new_index.replace_rows(item)
+                col_slice.info.indices.append(new_index)
+
+        return col_slice
+
 
 class MixinInfo(BaseColumnInfo):
     pass

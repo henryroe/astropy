@@ -11,19 +11,19 @@ from __future__ import (absolute_import, unicode_literals, division,
 
 # Standard library
 import numbers
+from fractions import Fraction
 
 import numpy as np
 
 # AstroPy
 from ..extern import six
 from .core import (Unit, dimensionless_unscaled, UnitBase, UnitsError,
-                   get_current_unit_registry)
+                   get_current_unit_registry, UnitConversionError)
 from .format.latex import Latex
-from ..utils.compat import NUMPY_LT_1_7, NUMPY_LT_1_8, NUMPY_LT_1_9
+from ..utils.compat import NUMPY_LT_1_8, NUMPY_LT_1_9
 from ..utils.compat.misc import override__dir__
 from ..utils.misc import isiterable, InheritDocstrings
 from ..utils.data_info import ParentDtypeInfo
-from .utils import validate_power
 from .. import config as _config
 
 
@@ -98,7 +98,12 @@ class QuantityIterator(object):
 
     def __getitem__(self, indx):
         out = self._dataiter.__getitem__(indx)
-        return self._quantity._new_view(out)
+        # For single elements, ndarray.flat.__getitem__ returns scalars; these
+        # need a new view as a Quantity.
+        if isinstance(out, type(self._quantity)):
+            return out
+        else:
+            return self._quantity._new_view(out)
 
     def __setitem__(self, index, value):
         self._dataiter[index] = self._quantity._to_own_unit(value)
@@ -108,6 +113,7 @@ class QuantityIterator(object):
         Return the next value, or raise StopIteration.
         """
         out = next(self._dataiter)
+        # ndarray.flat._dataiter returns scalars, so need a view as a Quantity.
         return self._quantity._new_view(out)
 
     next = __next__
@@ -120,6 +126,7 @@ class QuantityInfo(ParentDtypeInfo):
     be used as a general way to store meta information.
     """
     attrs_from_parent = set(['dtype', 'unit'])  # dtype and unit taken from parent
+    _supports_indexing = True
 
     @staticmethod
     def default_format(val):
@@ -214,8 +221,9 @@ class Quantity(np.ndarray):
                             subok=True, ndmin=ndmin)
 
         # Maybe list/tuple of Quantity? short-circuit array for speed
-        if(not isinstance(value, np.ndarray) and isiterable(value) and
-           all(isinstance(v, Quantity) for v in value)):
+        if (not isinstance(value, np.ndarray) and isiterable(value) and
+            all(isinstance(v, Quantity) for v in value)):
+            # Convert all quantities to the same unit.
             if unit is None:
                 unit = value[0].unit
             value = [q.to(unit).value for q in value]
@@ -348,17 +356,27 @@ class Quantity(np.ndarray):
         # amount that depends on one of the input values, so we need to treat
         # this as a special case.
         # TODO: find a better way to deal with this case
-        if function is np.power and result_unit is not dimensionless_unscaled:
+        if function is np.power and result_unit != dimensionless_unscaled:
 
             if units[1] is None:
                 p = args[1]
             else:
                 p = args[1].to(dimensionless_unscaled).value
 
-            result_unit = result_unit ** validate_power(p)
+            try:
+                result_unit = result_unit ** p
+            except ValueError as exc:
+                # Changing the unit does not work for, e.g., array-shaped
+                # power, but this is OK if we're (scaled) dimensionless.
+                try:
+                    converters[0] = units[0]._get_converter(
+                        dimensionless_unscaled)
+                except UnitConversionError:
+                    raise exc
+                else:
+                    result_unit = dimensionless_unscaled
 
         # We now prepare the output object
-
         if self is obj:
 
             # this happens if the output object is self, which happens
@@ -486,10 +504,20 @@ class Quantity(np.ndarray):
                 # For output arrays that require scaling, we can reuse the
                 # output array to perform the scaling in place, as long as the
                 # array is not integral. Here, we set the obj_array to `None`
-                # when it can not be used to store the scaled result.
-                if not (result_unit is None or
-                        np.can_cast(np.result_type(*inputs), obj_array.dtype)):
+                # when it cannot be used to store the scaled result.
+                # Use a try/except, since np.result_type can fail, which would
+                # break the wrapping #4770.
+                try:
+                    tmp_dtype = np.result_type(*inputs)
+                # Catch the appropriate exceptions: TypeError or ValueError in
+                # case the result_type raised an Exception, i.e. inputs is list
+                except (TypeError, ValueError):
                     obj_array = None
+                else:
+                    # Explicitly check if it can store the result.
+                    if not (result_unit is None or
+                            np.can_cast(tmp_dtype, obj_array.dtype)):
+                        obj_array = None
 
                 # Re-compute the output using the ufunc
                 if function.nin == 1:
@@ -548,7 +576,7 @@ class Quantity(np.ndarray):
 
         Parameters
         ----------
-        obj : ndarray
+        obj : ndarray or scalar
             The array to create a view of.  If obj is a numpy or python scalar,
             it will be converted to an array scalar.
 
@@ -621,8 +649,8 @@ class Quantity(np.ndarray):
         if equivalencies == []:
             equivalencies = self._equivalencies
         unit = Unit(unit)
-        new_val = np.asarray(
-            self.unit.to(unit, self.value, equivalencies=equivalencies))
+        new_val = self.unit.to(unit, self.view(np.ndarray),
+                               equivalencies=equivalencies)
         return self._new_view(new_val, unit)
 
     info = QuantityInfo()
@@ -848,6 +876,14 @@ class Quantity(np.ndarray):
         return (self._new_view(result_tuple[0], dimensionless_unscaled),
                 self._new_view(result_tuple[1]))
 
+    def __pow__(self, other):
+        if isinstance(other, Fraction):
+            # Avoid getting object arrays by raising the value to a Fraction.
+            return self._new_view(self.value ** float(other),
+                                  self.unit ** other)
+
+        return super(Quantity, self).__pow__(other)
+
     def __pos__(self):
         """
         Plus the quantity. This is implemented in case users use +q where q is
@@ -873,17 +909,33 @@ class Quantity(np.ndarray):
         return quantity_iter()
 
     def __getitem__(self, key):
-        if self.isscalar and not self.dtype.fields:
-            raise TypeError(
-                "'{cls}' object with a scalar value does not support "
-                "indexing".format(cls=self.__class__.__name__))
-        out = super(Quantity, self).__getitem__(key)
-        return self._new_view(out)
+        try:
+            out = super(Quantity, self).__getitem__(key)
+        except IndexError:
+            # We want zero-dimensional Quantity objects to behave like scalars,
+            # so they should raise a TypeError rather than an IndexError.
+            if self.isscalar:
+                raise TypeError(
+                    "'{cls}' object with a scalar value does not support "
+                    "indexing".format(cls=self.__class__.__name__))
+            else:
+                raise
+        # For single elements, ndarray.__getitem__ returns scalars; these
+        # need a new view as a Quantity.
+        if type(out) is not type(self):
+            out = self._new_view(out)
+        return out
 
     def __setitem__(self, i, value):
+        # update indices
+        if not self.isscalar:
+            self.info.adjust_indices(i, value, len(self))
         self.view(np.ndarray).__setitem__(i, self._to_own_unit(value))
 
     def __setslice__(self, i, j, value):
+        # update indices
+        if not self.isscalar:
+            self.info.adjust_indices(slice(i, j), value, len(self))
         self.view(np.ndarray).__setslice__(i, j, self._to_own_unit(value))
 
     # __contains__ is OK
@@ -975,31 +1027,24 @@ class Quantity(np.ndarray):
         lstr
             A LaTeX string with the contents of this Quantity
         """
-        if NUMPY_LT_1_7:
-            if self.isscalar:
-                latex_value = Latex.format_exponential_notation(self.value)
-            else:
-                raise NotImplementedError('Cannot represent Quantity arrays '
-                                          'in LaTex format for numpy < v1.7.')
-        else:
-            # need to do try/finally because "threshold" cannot be overridden
-            # with array2string
-            pops = np.get_printoptions()
-            try:
-                formatter = {'all' : Latex.format_exponential_notation,
-                             'str_kind': lambda x: x}
-                if conf.latex_array_threshold > -1:
-                    np.set_printoptions(threshold=conf.latex_array_threshold,
-                                        formatter=formatter)
+        # need to do try/finally because "threshold" cannot be overridden
+        # with array2string
+        pops = np.get_printoptions()
+        try:
+            formatter = {'all': Latex.format_exponential_notation,
+                         'str_kind': lambda x: x}
+            if conf.latex_array_threshold > -1:
+                np.set_printoptions(threshold=conf.latex_array_threshold,
+                                    formatter=formatter)
 
-                # the view is needed for the scalar case - value might be float
-                latex_value = np.array2string(self.view(np.ndarray),
-                                              style=Latex.format_exponential_notation,
-                                              max_line_width=np.inf,
-                                              separator=',~')
-                latex_value = latex_value.replace('...', r'\dots')
-            finally:
-                np.set_printoptions(**pops)
+            # the view is needed for the scalar case - value might be float
+            latex_value = np.array2string(self.view(np.ndarray),
+                                          style=Latex.format_exponential_notation,
+                                          max_line_width=np.inf,
+                                          separator=',~')
+            latex_value = latex_value.replace('...', r'\dots')
+        finally:
+            np.set_printoptions(**pops)
 
         # Format unit
         # [1:-1] strips the '$' on either side needed for math mode
@@ -1094,8 +1139,7 @@ class Quantity(np.ndarray):
     # http://docs.scipy.org/doc/numpy/reference/arrays.ndarray.html#array-conversion
 
     def item(self, *args):
-        # item returns python built-ins, so use initializer, not _new_view
-        return self.__class__(super(Quantity, self).item(*args), self.unit)
+        return self._new_view(super(Quantity, self).item(*args))
 
     def tolist(self):
         raise NotImplementedError("cannot make a list of Quantities.  Get "
@@ -1240,8 +1284,12 @@ class Quantity(np.ndarray):
             if unit is None:
                 unit = self.unit
 
-            if not (isinstance(out, Quantity) and
-                    out.__quantity_subclass__(unit)[0] is type(out)):
+            if (isinstance(out, Quantity) and
+                out.__quantity_subclass__(unit)[0] is type(out)):
+                # Set out to ndarray view to prevent calling __array_prepare__.
+                kwargs['out'] = out.view(np.ndarray)
+
+            else:
                 ok_class =  (out.__quantity_subclass__(out, unit)[0]
                              if isinstance(out, Quantity) else Quantity)
                 raise TypeError("out cannot be assigned to a {0} instance; "
@@ -1279,49 +1327,26 @@ class Quantity(np.ndarray):
     def round(self, decimals=0, out=None):
         return self._wrap_function(np.round, decimals, out=out)
 
-    if NUMPY_LT_1_7:
-        # 'keepdims' was not yet available.
-        def max(self, axis=None, out=None):
-            return self._wrap_function(np.max, axis, out=out)
+    def max(self, axis=None, out=None, keepdims=False):
+        return self._wrap_function(np.max, axis, out=out, keepdims=keepdims)
 
-        def min(self, axis=None, out=None):
-            return self._wrap_function(np.min, axis, out=out)
+    def min(self, axis=None, out=None, keepdims=False):
+        return self._wrap_function(np.min, axis, out=out, keepdims=keepdims)
 
-        def sum(self, axis=None, dtype=None, out=None):
-            return self._wrap_function(np.sum, axis, dtype, out=out)
+    def sum(self, axis=None, dtype=None, out=None, keepdims=False):
+        return self._wrap_function(np.sum, axis, dtype, out=out,
+                                   keepdims=keepdims)
 
-        def prod(self, axis=None, dtype=None, out=None):
-            if not self.unit.is_unity():
-                raise ValueError("cannot use prod on scaled or "
-                                 "non-dimensionless Quantity arrays")
-            return self._wrap_function(np.prod, axis, dtype, out=out)
+    def prod(self, axis=None, dtype=None, out=None, keepdims=False):
+        if not self.unit.is_unity():
+            raise ValueError("cannot use prod on scaled or "
+                             "non-dimensionless Quantity arrays")
+        return self._wrap_function(np.prod, axis, dtype, out=out,
+                                   keepdims=keepdims)
 
-        # 'out' was not yet available.
-        def dot(self, b):
-            result_unit = self.unit * getattr(b, 'unit', dimensionless_unscaled)
-            return self._wrap_function(np.dot, b, unit=result_unit)
-
-    else:
-        def max(self, axis=None, out=None, keepdims=False):
-            return self._wrap_function(np.max, axis, out=out, keepdims=keepdims)
-
-        def min(self, axis=None, out=None, keepdims=False):
-            return self._wrap_function(np.min, axis, out=out, keepdims=keepdims)
-
-        def sum(self, axis=None, dtype=None, out=None, keepdims=False):
-            return self._wrap_function(np.sum, axis, dtype, out=out,
-                                       keepdims=keepdims)
-
-        def prod(self, axis=None, dtype=None, out=None, keepdims=False):
-            if not self.unit.is_unity():
-                raise ValueError("cannot use prod on scaled or "
-                                 "non-dimensionless Quantity arrays")
-            return self._wrap_function(np.prod, axis, dtype, out=out,
-                                       keepdims=keepdims)
-
-        def dot(self, b, out=None):
-            result_unit = self.unit * getattr(b, 'unit', dimensionless_unscaled)
-            return self._wrap_function(np.dot, b, out=out, unit=result_unit)
+    def dot(self, b, out=None):
+        result_unit = self.unit * getattr(b, 'unit', dimensionless_unscaled)
+        return self._wrap_function(np.dot, b, out=out, unit=result_unit)
 
     def cumsum(self, axis=None, dtype=None, out=None):
         return self._wrap_function(np.cumsum, axis, dtype, out=out)
@@ -1331,7 +1356,6 @@ class Quantity(np.ndarray):
             raise ValueError("cannot use cumprod on scaled or "
                              "non-dimensionless Quantity arrays")
         return self._wrap_function(np.cumprod, axis, dtype, out=out)
-
 
     # Calculation: override methods that do not make sense.
 

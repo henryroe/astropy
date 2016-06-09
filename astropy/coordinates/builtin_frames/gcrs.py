@@ -32,12 +32,14 @@ class GCRS(BaseCoordinateFrame):
         The time at which the observation is taken.  Used for determining the
         position of the Earth.
     * ``obsgeoloc``
-        3-vector giving the position of the observer relative to the
+        Vector giving the position of the observer relative to the
         center-of-mass of the Earth, oriented the same as BCRS/ICRS.
+        The leading dimension of this vector needs to be 3.
         Defaults to 0,  meaning "true" GCRS.
     * ``obsgeovel``
-        3-vector giving the velocity of the observer relative to the
+        Vector giving the velocity of the observer relative to the
         center-of-mass of the Earth, oriented the same as BCRS/ICRS.
+        The leading dimension of this vector needs to be 3.
         Defaults to 0, meaning "true" GCRS.
 
     Parameters
@@ -53,6 +55,9 @@ class GCRS(BaseCoordinateFrame):
     distance : `~astropy.units.Quantity`, optional, must be keyword
         The Distance for this object along the line-of-sight.
         (``representation`` must be None).
+    copy : bool, optional
+        If `True` (default), make copies of the input coordinate arrays.
+        Can only be passed in as a keyword argument.
     """
 
     frame_specific_representation_info = {
@@ -109,6 +114,9 @@ class PrecessedGeocentric(BaseCoordinateFrame):
     distance : `~astropy.units.Quantity`, optional, must be keyword
         The Distance for this object along the line-of-sight.
         (``representation`` must be None).
+    copy : bool, optional
+        If `True` (default), make copies of the input coordinate arrays.
+        Can only be passed in as a keyword argument.
     """
 
     frame_specific_representation_info = {

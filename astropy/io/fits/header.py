@@ -4,10 +4,8 @@ from __future__ import division
 
 import collections
 import copy
-import inspect
 import itertools
 import re
-import sys
 import warnings
 
 from .card import Card, CardList, _pad, KEYWORD_LENGTH
@@ -86,7 +84,8 @@ class Header(object):
         Parameters
         ----------
         cards : A list of `Card` objects, optional
-            The cards to initialize the header with.
+            The cards to initialize the header with. Also allowed are other
+            `Header` (or `dict`-like) objects.
 
         txtfile : file path, file object or file-like object, optional
             Input ASCII header parameters file **(Deprecated)**
@@ -107,6 +106,8 @@ class Header(object):
 
         if isinstance(cards, Header):
             cards = cards.cards
+        elif isinstance(cards, dict):
+            cards = six.iteritems(cards)
 
         for card in cards:
             self.append(card, end=True)
@@ -221,21 +222,11 @@ class Header(object):
                 indices = self._rvkc_indices
 
             if key not in indices:
-                if _is_astropy_internal():
-                    # All internal code is designed to assume that this will
-                    # raise a KeyError, so go ahead and do so
-                    raise KeyError("Keyword '%s' not found." % key)
-                # Warn everyone else.
-                # TODO: Remove this warning and make KeyError the default after
-                # a couple versions (by 3.3, say)
-                warnings.warn(
-                    'Deletion of non-existent keyword %r: '
-                    'In a future Astropy version Header.__delitem__ may be '
-                    'changed so that this raises a KeyError just like a dict '
-                    'would. Please update your code so that KeyErrors are '
-                    'caught and handled when deleting non-existent keywords.' %
-                    key, AstropyDeprecationWarning)
-                return
+                # if keyword is not present raise KeyError.
+                # To delete keyword without caring if they were present,
+                # Header.remove(Keyword) can be used with optional argument ignore_missing as True
+                raise KeyError("Keyword '%s' not found." % key)
+
             for idx in reversed(indices[key]):
                 # Have to copy the indices list since it will be modified below
                 del self[idx]
@@ -423,7 +414,7 @@ class Header(object):
         endcard : bool, optional
             If True (the default) the header must end with an END card in order
             to be considered valid.  If an END card is not found an
-            `~.exceptions.IOError` is raised.
+            `IOError` is raised.
 
         padding : bool, optional
             If True (the default) the header will be required to be padded out
@@ -1527,7 +1518,7 @@ class Header(object):
 
         self._modified = True
 
-    def remove(self, keyword):
+    def remove(self, keyword, ignore_missing=False, remove_all=False):
         """
         Removes the first instance of the given keyword from the header similar
         to `list.remove` if the Header object is treated as a list of keywords.
@@ -1535,11 +1526,26 @@ class Header(object):
         Parameters
         ----------
         keyword : str
-            The keyword of which to remove the first instance in the header
+            The keyword of which to remove the first instance in the header.
+
+        ignore_missing : bool, optional
+            When True, ignores missing keywords.  Otherwise, if the keyword
+            is not present in the header a KeyError is raised.
+
+        remove_all : bool, optional
+            When True, all instances of keyword will be removed.
+            Otherwise only the first instance of the given keyword is removed.
 
         """
+        keyword = Card.normalize_keyword(keyword)
+        if keyword in self._keyword_indices:
+            del self[self._keyword_indices[keyword][0]]
+            if remove_all:
+                while keyword in self._keyword_indices:
+                    del self[self._keyword_indices[keyword][0]]
+        elif not ignore_missing:
+            raise KeyError("Keyword '%s' not found." % keyword)
 
-        del self[self.index(keyword)]
 
     def rename_keyword(self, oldkeyword, newkeyword, force=False):
         """
@@ -1556,7 +1562,7 @@ class Header(object):
         force : bool, optional
             When `True`, if the new keyword already exists in the header, force
             the creation of a duplicate keyword. Otherwise a
-            `~.exceptions.ValueError` is raised.
+            `ValueError` is raised.
         """
 
         oldkeyword = Card.normalize_keyword(oldkeyword)
@@ -2288,20 +2294,6 @@ class _HeaderCommentaryCards(_CardAccessor):
         # In this case, key/index errors should be raised; don't update
         # comments of nonexistent cards
         self._header[(self._keyword, item)] = value
-
-
-def _is_astropy_internal():
-    """
-    Returns True if the stack frame this is called from is in code internal to
-    the astropy package.
-
-    This is used in a few places where hacks are employed for backwards
-    compatibility with the old header API, but where we want to avoid using
-    those hacks internally.
-    """
-
-    calling_mod = inspect.getmodule(sys._getframe(2))
-    return calling_mod and calling_mod.__name__.startswith('astropy.')
 
 
 def _block_size(sep):

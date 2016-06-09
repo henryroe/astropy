@@ -14,7 +14,7 @@ from numpy.testing.utils import assert_allclose
 # LOCAL
 from ... import units as u
 from ... import constants
-from ...tests.helper import pytest
+from ...tests.helper import pytest, assert_quantity_allclose
 
 
 def test_dimensionless_angles():
@@ -384,11 +384,15 @@ def test_spectraldensity4():
 
 
 def test_equivalent_units():
-    units = u.g.find_equivalent_units()
-    units_set = set(units)
-    match = set(
-        [u.M_e, u.M_p, u.g, u.kg, u.solMass, u.t, u.u])
-    assert units_set == match
+    from .. import imperial
+    with u.add_enabled_units(imperial):
+        units = u.g.find_equivalent_units()
+        units_set = set(units)
+        match = set(
+            [u.M_e, u.M_p, u.g, u.kg, u.solMass, u.t, u.u, u.M_earth,
+             u.M_jup, imperial.oz, imperial.lb, imperial.st, imperial.ton,
+             imperial.slug])
+        assert units_set == match
 
     r = repr(units)
     assert r.count('\n') == len(units) + 2
@@ -398,7 +402,8 @@ def test_equivalent_units2():
     units = set(u.Hz.find_equivalent_units(u.spectral()))
     match = set(
         [u.AU, u.Angstrom, u.Hz, u.J, u.Ry, u.cm, u.eV, u.erg, u.lyr,
-         u.m, u.micron, u.pc, u.solRad, u.Bq, u.Ci, u.k])
+         u.m, u.micron, u.pc, u.solRad, u.Bq, u.Ci, u.k, u.earthRad,
+         u.jupiterRad])
     assert units == match
 
     from .. import imperial
@@ -409,13 +414,14 @@ def test_equivalent_units2():
              imperial.cal, u.cm, u.eV, u.erg, imperial.ft, imperial.fur,
              imperial.inch, imperial.kcal, u.lyr, u.m, imperial.mi,
              imperial.mil, u.micron, u.pc, u.solRad, imperial.yd, u.Bq, u.Ci,
-             imperial.nmi, u.k])
+             imperial.nmi, u.k, u.earthRad, u.jupiterRad])
         assert units == match
 
     units = set(u.Hz.find_equivalent_units(u.spectral()))
     match = set(
         [u.AU, u.Angstrom, u.Hz, u.J, u.Ry, u.cm, u.eV, u.erg, u.lyr,
-         u.m, u.micron, u.pc, u.solRad, u.Bq, u.Ci, u.k])
+         u.m, u.micron, u.pc, u.solRad, u.Bq, u.Ci, u.k, u.earthRad,
+         u.jupiterRad])
     assert units == match
 
 
@@ -560,3 +566,37 @@ def test_compose_equivalencies():
             break
     else:
         assert False, "Didn't find speed in compose results"
+
+
+def test_pixel_scale():
+    pix = 75*u.pix
+    asec = 30*u.arcsec
+
+    pixscale = 0.4*u.arcsec/u.pix
+    pixscale2 = 2.5*u.pix/u.arcsec
+
+    assert_quantity_allclose(pix.to(u.arcsec, u.pixel_scale(pixscale)), asec)
+    assert_quantity_allclose(pix.to(u.arcmin, u.pixel_scale(pixscale)), asec)
+
+    assert_quantity_allclose(pix.to(u.arcsec, u.pixel_scale(pixscale2)), asec)
+    assert_quantity_allclose(pix.to(u.arcmin, u.pixel_scale(pixscale2)), asec)
+
+    assert_quantity_allclose(asec.to(u.pix, u.pixel_scale(pixscale)), pix)
+    assert_quantity_allclose(asec.to(u.pix, u.pixel_scale(pixscale2)), pix)
+
+
+def test_plate_scale():
+    mm = 1.5*u.mm
+    asec = 30*u.arcsec
+
+    platescale = 20*u.arcsec/u.mm
+    platescale2 = 0.05*u.mm/u.arcsec
+
+    assert_quantity_allclose(mm.to(u.arcsec, u.plate_scale(platescale)), asec)
+    assert_quantity_allclose(mm.to(u.arcmin, u.plate_scale(platescale)), asec)
+
+    assert_quantity_allclose(mm.to(u.arcsec, u.plate_scale(platescale2)), asec)
+    assert_quantity_allclose(mm.to(u.arcmin, u.plate_scale(platescale2)), asec)
+
+    assert_quantity_allclose(asec.to(u.mm, u.plate_scale(platescale)), mm)
+    assert_quantity_allclose(asec.to(u.mm, u.plate_scale(platescale2)), mm)

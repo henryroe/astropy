@@ -1,0 +1,145 @@
+.. doctest-skip-all
+
+.. _whatsnew-1.2:
+
+==========================
+What's New in Astropy 1.2?
+==========================
+
+Overview
+--------
+
+Astropy 1.2 is a major release that adds significant new functionality since
+the 1.1.x series of releases.
+
+In particular, this release includes:
+
+*
+*
+*
+
+In addition to these major changes, Astropy 1.2 includes a large number of
+smaller improvements and bug fixes, which are described in the
+:ref:`changelog`. By the numbers:
+
+* ??? issues have been closed since v1.1
+* ??? pull requests have been merged since v1.1
+* ??? distinct people have contributed code
+
+Solar system ephemerides
+------------------------
+
+Positions of the major solar-system bodies, including the moon, can now be
+calculated.  These integrate with the coordinates subpackage, allowing use of
+apparent (e.g. ``AltAz``) positions or barycentric values.  These can be
+calculated using either using built-in approximations or more precisely 
+using JPL ephemeris models (the latter requiring the ``jplephem`` package).
+For more details, see :ref:`astropy-coordinates-solarsystem`.
+
+Barycentric light-travel time corrections
+-----------------------------------------
+
+The :class:`~astropy.time.Time` class has gained a new method
+:meth:`~astropy.time.Time.light_travel_time` for calculating barycentric
+(or heliocentric) corrections. For more details, see 
+:ref:`time-light-travel-time`.
+
+Astrometric coordinate frames
+-----------------------------
+
+
+
+Lomb-scargle periodograms
+-------------------------
+
+
+
+Other new statistics features
+-----------------------------
+
+* The Jackknife resampling method is available in astropy.stats.jackknife.
+  Jackknife resampling generates n deterministic samples of size n-1 from
+  a measured sample of size n. Those samples can then be used for various
+  statistics estimation such as variance and bias.
+* Circular statistics (circular mean, variance, etc) are provided in
+  astropy.stats.circstats. The API basically follows the same conventions of
+  R CircStats package. In addition, the circular stats are compatible with
+  astropy.units.Quantity.
+* Akaike and Bayesian information criterions are implemented in
+  astropy.stats.info_theory. Basically, these information criterions are used
+  to decided whether increasing the number of parameters in a model truly
+  improves the fitting. Conversely, they are also used to verify whether
+  improvements in fitting are due to the increasing of the number of
+  parameters.
+
+
+Apparent/absolute bolometric magnitudes and other new units
+-----------------------------------------------------------
+
+
+
+Zscale implementation
+---------------------
+
+The `zscale <http://iraf.net/forum/viewtopic.php?showtopic=134139>`_ algorithm
+from IRAF is now included in Astropy's :doc:`visualization
+<../visualization/normalization>` sub-package, and available as
+a `~astropy.visualization.ZScaleInterval` interval class. The implementation is
+based on `Numdisplay’s <http://stsdas.stsci.edu/numdisplay/>`_ one, slightly
+modified to expose more arguments and work with data with any number of
+dimensions.
+
+NDData improvements
+-------------------
+
+
+Arithmetic and uncertainty handling have been enhanced for astropy 1.2, and a
+new class, `astropy.nddata.NDDataRef`, has been added that should be the
+starting point for new users of `astropy.nddata`. One can now do arithmetic
+between an `astropy.nddata.NDDataRef` object and a scalar, an
+`astropy.units.Quantity` or another `astropy.nddata.NDDataRef` object (or any
+class that implements the nddata interface). Limited support for propagating
+correlated errors was added to `astropy.nddata.StdDevUncertainty`.
+
+Several internal changes were made to the classes in the nddata package to
+make writing custom classes that implement the nddata interface more
+straightforward.
+
+Automatic updates to IERS Earth rotation data
+---------------------------------------------
+
+The `astropy.utils.iers` sub-package provides access to the tables provided by
+the International Earth Rotation and Reference Systems (IERS) service.  These
+are used in `astropy.time` to tranform to/from UT1 values and for determining
+Earth orientation for celestional-to-terrestrial coordinate transformations (in
+`astropy.coordinates`).
+
+Starting with astropy 1.2, the latest IERS values (which include approximately
+one year of predictive values) are automatically downloaded from the IERS
+service when required.  This happens when a time or coordinate transformation
+needs a value which is not already available via the download cache.
+
+For details see the `astropy.utils.iers` sub-package documentation.
+
+New example gallery
+-------------------
+
+The Astropy documentation now contains an example gallery that highlights key
+functionality of the package in short snippets of code with descriptive text.
+The examples are meant to demonstrate the functionality and interoperability of
+the subpackages in shorter-form worked examples. Longer form tutorials are still
+maintained at `<http://tutorials.astropy.org/>`_.
+
+
+Other significant changes
+-------------------------
+
+Astropy now requires Numpy 1.7.0 or later.
+
+Full change log
+---------------
+
+To see a detailed list of all changes in version v1.2, including changes in
+API, please see the :ref:`changelog`.
+
+

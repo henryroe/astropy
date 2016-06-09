@@ -1,3 +1,4 @@
+# This Python file uses the following encoding: utf-8
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
 # TEST_UNICODE_LITERALS
@@ -7,7 +8,8 @@ import numpy as np
 from ...tests.helper import pytest
 from ... import table
 from ...table import Table
-from ...extern.six import PY3
+from ...table.table_helpers import simple_table
+from ...extern.six import PY2
 from ...utils import console
 
 BIG_WIDE_ARR = np.arange(2000, dtype=np.float64).reshape(100, 20)
@@ -38,9 +40,10 @@ class TestMultiD():
                          '<tr><td>1 .. 2</td><td>3 .. 4</td><td>5 .. 6</td></tr>',
                          '<tr><td>10 .. 20</td><td>30 .. 40</td><td>50 .. 60</td></tr>',
                          '</table>']
+        nbclass = table.conf.default_notebook_table_class
         assert t._repr_html_().splitlines() == [
             '&lt;{0} masked={1} length=2&gt;'.format(table_type.__name__, t.masked),
-            '<table id="table{tid}">'.format(tid=id(t)),
+            '<table id="table{id}" class="{nbclass}">'.format(id=id(t), nbclass=nbclass),
             '<thead><tr><th>col0 [2]</th><th>col1 [2]</th><th>col2 [2]</th></tr></thead>',
             '<thead><tr><th>int64</th><th>int64</th><th>int64</th></tr></thead>',
             '<tr><td>1 .. 2</td><td>3 .. 4</td><td>5 .. 6</td></tr>',
@@ -76,9 +79,10 @@ class TestMultiD():
                          '<tr><td>1</td><td>3</td><td>5</td></tr>',
                          '<tr><td>10</td><td>30</td><td>50</td></tr>',
                          '</table>']
+        nbclass = table.conf.default_notebook_table_class
         assert t._repr_html_().splitlines() == [
             '&lt;{0} masked={1} length=2&gt;'.format(table_type.__name__, t.masked),
-            '<table id="table{id}">'.format(id=id(t)),
+            '<table id="table{id}" class="{nbclass}">'.format(id=id(t), nbclass=nbclass),
             '<thead><tr><th>col0 [1,1]</th><th>col1 [1,1]</th><th>col2 [1,1]</th></tr></thead>',
             '<thead><tr><th>int64</th><th>int64</th><th>int64</th></tr></thead>',
             '<tr><td>1</td><td>3</td><td>5</td></tr>', u'<tr><td>10</td><td>30</td><td>50</td></tr>',
@@ -95,9 +99,10 @@ class TestMultiD():
 
 def test_html_escaping():
     t = table.Table([(str('<script>alert("gotcha");</script>'), 2, 3)])
+    nbclass = table.conf.default_notebook_table_class
     assert t._repr_html_().splitlines() == [
         '&lt;Table length=3&gt;',
-        '<table id="table{id}">'.format(id=id(t)),
+        '<table id="table{id}" class="{nbclass}">'.format(id=id(t), nbclass=nbclass),
         '<thead><tr><th>col0</th></tr></thead>',
         '<thead><tr><th>str33</th></tr></thead>',
         '<tr><td>&lt;script&gt;alert(&quot;gotcha&quot;);&lt;/script&gt;</td></tr>',
@@ -502,8 +507,8 @@ class TestFormatWithMaskedElements():
         arr = [np.array([[1, 2],
                          [10, 20]])]
         t = Table(arr, names=['a'], masked=True)
-        t['a'].mask[0,1] = True
-        t['a'].mask[1,1] = True
+        t['a'].mask[0, 1] = True
+        t['a'].mask[1, 1] = True
         # mathematical function
         t['a'].format = lambda x: str(x * 3.)
         outstr = '  a [2]   \n----------\n 3.0 .. --\n30.0 .. --'
@@ -524,18 +529,147 @@ def test_pprint_npfloat32():
 
 def test_pprint_py3_bytes():
     """
-    Test for #1346.  Make sure a bytestring (dtype=S<N>) in Python 3 is printed
-    correctly (without the "b" prefix like b'string').
+    Test for #1346 and #4944. Make sure a bytestring (dtype=S<N>) in Python 3
+    is printed correctly (without the "b" prefix like b'string').
+    Also make sure special characters are printed in Python 2.
     """
-    val = bytes('val', encoding='utf-8') if PY3 else 'val'
-    dat = np.array([(val,)], dtype=[(str('col'), 'S3')])
+    val = str('val') if PY2 else bytes('val', encoding='utf-8')
+    blah = u'bläh'.encode('utf-8') if PY2 else bytes('bläh', encoding='utf-8')
+    dat = np.array([val, blah], dtype=[(str('col'), 'S10')])
     t = table.Table(dat)
-    assert t['col'].pformat() == ['col', '---', 'val']
+    assert t['col'].pformat() == ['col ', '----', ' val', u'bl\xe4h']
 
 
 def test_pprint_nameless_col():
     """Regression test for #2213, making sure a nameless column can be printed
     using None as the name.
     """
-    col = table.Column([1.,2.])
+    col = table.Column([1., 2.])
     assert str(col).startswith('None')
+
+
+def test_html():
+    """Test HTML printing"""
+    dat = np.array([1., 2.], dtype=np.float32)
+    t = Table([dat], names=['a'])
+
+    lines = t.pformat(html=True)
+    assert lines == ['<table id="table{id}">'.format(id=id(t)),
+                     u'<thead><tr><th>a</th></tr></thead>',
+                     u'<tr><td>1.0</td></tr>',
+                     u'<tr><td>2.0</td></tr>',
+                     u'</table>']
+
+    lines = t.pformat(html=True, tableclass='table-striped')
+    assert lines == [
+        '<table id="table{id}" class="table-striped">'.format(id=id(t)),
+        u'<thead><tr><th>a</th></tr></thead>',
+        u'<tr><td>1.0</td></tr>',
+        u'<tr><td>2.0</td></tr>',
+        u'</table>']
+
+    lines = t.pformat(html=True, tableclass=['table', 'table-striped'])
+    assert lines == [
+        '<table id="table{id}" class="table table-striped">'.format(id=id(t)),
+        u'<thead><tr><th>a</th></tr></thead>',
+        u'<tr><td>1.0</td></tr>',
+        u'<tr><td>2.0</td></tr>',
+        u'</table>']
+
+def test_align():
+    t = simple_table(2, kinds='iS')
+    assert t.pformat() == [' a   b ',
+                           '--- ---',
+                           '  1   b',
+                           '  2   c']
+    # Use column format attribute
+    t['a'].format = '<'
+    assert t.pformat() == [' a   b ',
+                           '--- ---',
+                           '1     b',
+                           '2     c']
+
+    # Now override column format attribute with various combinations of align
+    tpf = [' a   b ',
+           '--- ---',
+           ' 1   b ',
+           ' 2   c ']
+    for align in ('^', ['^', '^'], ('^', '^')):
+        assert tpf == t.pformat(align=align)
+
+    assert t.pformat(align='<') == [' a   b ',
+                                    '--- ---',
+                                    '1   b  ',
+                                    '2   c  ']
+    assert t.pformat(align='0=') == [' a   b ',
+                                     '--- ---',
+                                     '001 00b',
+                                     '002 00c']
+
+    assert t.pformat(align=['<', '^']) == [' a   b ',
+                                           '--- ---',
+                                           '1    b ',
+                                           '2    c ']
+
+    # Now use fill characters.  Stress the system using a fill
+    # character that is the same as an align character.
+    t = simple_table(2, kinds='iS')
+
+    assert t.pformat(align='^^') == [' a   b ',
+                                     '--- ---',
+                                     '^1^ ^b^',
+                                     '^2^ ^c^']
+
+    assert t.pformat(align='^>') == [' a   b ',
+                                     '--- ---',
+                                     '^^1 ^^b',
+                                     '^^2 ^^c']
+
+    assert t.pformat(align='^<') == [' a   b ',
+                                     '--- ---',
+                                     '1^^ b^^',
+                                     '2^^ c^^']
+
+    # Complicated interaction (same as narrative docs example)
+    t1 = Table([[1.0, 2.0], [1, 2]], names=['column1', 'column2'])
+    t1['column1'].format = '#^.2f'
+
+    assert t1.pformat() == ['column1 column2',
+                            '------- -------',
+                            '##1.00#       1',
+                            '##2.00#       2']
+
+    assert t1.pformat(align='!<') ==  ['column1 column2',
+                                       '------- -------',
+                                       '1.00!!! 1!!!!!!',
+                                       '2.00!!! 2!!!!!!']
+
+    assert t1.pformat(align=[None, '!<']) == ['column1 column2',
+                                              '------- -------',
+                                              '##1.00# 1!!!!!!',
+                                              '##2.00# 2!!!!!!']
+
+    # Zero fill
+    t['a'].format = '+d'
+    assert t.pformat(align='0=') == [' a   b ',
+                                     '--- ---',
+                                     '+01 00b',
+                                     '+02 00c']
+
+    with pytest.raises(ValueError):
+        t.pformat(align=['fail'])
+
+    with pytest.raises(TypeError):
+        t.pformat(align=0)
+
+    with pytest.raises(TypeError):
+        t.pprint(align=0)
+
+    # Make sure pprint() does not raise an exception
+    t.pprint()
+
+    with pytest.raises(ValueError):
+        t.pprint(align=['<', '<', '<'])
+
+    with pytest.raises(ValueError):
+        t.pprint(align='x=')

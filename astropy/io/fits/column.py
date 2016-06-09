@@ -8,19 +8,21 @@ import warnings
 import weakref
 
 from functools import reduce
+from collections import OrderedDict
 
 import numpy as np
 from numpy import char as chararray
 
+from . import _numpy_hacks as nh
 from .card import Card, CARD_LENGTH
 from .util import (pairwise, _is_int, _convert_array, encode_ascii, cmp,
                    NotifierMixin)
 from .verify import VerifyError, VerifyWarning
 
 from ...extern.six import string_types, iteritems
-from ...utils import lazyproperty, isiterable, indent, OrderedDict
-from ...utils.compat import ignored
-
+from ...utils import lazyproperty, isiterable, indent
+from ...utils.compat import suppress
+from ...utils.exceptions import AstropyDeprecationWarning
 
 __all__ = ['Column', 'ColDefs', 'Delayed']
 
@@ -48,10 +50,16 @@ NUMPY2FITS['b1'] = 'L'
 NUMPY2FITS['u2'] = 'I'
 NUMPY2FITS['u4'] = 'J'
 NUMPY2FITS['u8'] = 'K'
+# Add half precision floating point numbers which will be up-converted to
+# single precision.
+NUMPY2FITS['f2'] = 'E'
 
 # This is the order in which values are converted to FITS types
 # Note that only double precision floating point/complex are supported
 FORMATORDER = ['L', 'B', 'I', 'J', 'K', 'D', 'M', 'A']
+
+# Convert single precision floating point/complex to double precision.
+FITSUPCONVERTERS = {'E' : 'D', 'C' : 'M'}
 
 # mapping from ASCII table TFORM data type to numpy data type
 # A: Character
@@ -260,7 +268,7 @@ class _AsciiColumnFormat(_BaseColumnFormat):
     Conversions between the two column formats can be performed using the
     ``to/from_binary`` methods on this class, or the ``to/from_ascii``
     methods on the `_ColumnFormat` class.  But again, not all conversions are
-    possible and may result in a `~.exceptions.ValueError`.
+    possible and may result in a `ValueError`.
     """
 
     def __new__(cls, format, strict=False):
@@ -320,6 +328,9 @@ class _FormatX(str):
         obj.repeat = repeat
         return obj
 
+    def __getnewargs__(self):
+        return (self.repeat,)
+
     @property
     def tform(self):
         return '%sX' % self.repeat
@@ -346,6 +357,9 @@ class _FormatP(str):
         obj.repeat = repeat
         obj.max = max
         return obj
+
+    def __getnewargs__(self):
+        return (self.dtype, self.repeat, self.max)
 
     @classmethod
     def from_tform(cls, format):
@@ -460,7 +474,9 @@ class Column(NotifierMixin):
                  array=None, ascii=None):
         """
         Construct a `Column` by specifying attributes.  All attributes
-        except `format` can be optional.
+        except ``format`` can be optional; see :ref:`column_creation` and
+        :ref:`creating_ascii_table` for more information regarding
+        ``TFORM`` keyword.
 
         Parameters
         ----------
@@ -581,6 +597,7 @@ class Column(NotifierMixin):
         else:
             self._physical_values = False
 
+        self._parent_fits_rec = None
         self.array = array
 
     def __repr__(self):
@@ -610,6 +627,123 @@ class Column(NotifierMixin):
         """
 
         return hash((self.name.lower(), self.format))
+
+    @property
+    def array(self):
+        """
+        The Numpy `~numpy.ndarray` associated with this `Column`.
+
+        If the column was instantiated with an array passed to the ``array``
+        argument, this will return that array.  However, if the column is
+        later added to a table, such as via `BinTableHDU.from_columns` as
+        is typically the case, this attribute will be updated to reference
+        the associated field in the table, which may no longer be the same
+        array.
+        """
+
+        # Ideally the .array attribute never would have existed in the first
+        # place, or would have been internal-only.  This is a legacy of the
+        # older design from PyFITS that needs to have continued support, for
+        # now.
+
+        # One of the main problems with this design was that it created a
+        # reference cycle.  When the .array attribute was updated after
+        # creating a FITS_rec from the column (as explained in the docstring) a
+        # reference cycle was created.  This is because the code in BinTableHDU
+        # (and a few other places) does essentially the following:
+        #
+        # data._coldefs = columns  # The ColDefs object holding this Column
+        # for col in columns:
+        #     col.array = data.field(col.name)
+        #
+        # This way each columns .array attribute now points to the field in the
+        # table data.  It's actually a pretty confusing interface (since it
+        # replaces the array originally pointed to by .array), but it's the way
+        # things have been for a long, long time.
+        #
+        # However, this results, in *many* cases, in a reference cycle.
+        # Because the array returned by data.field(col.name), while sometimes
+        # an array that owns its own data, is usually like a slice of the
+        # original data.  It has the original FITS_rec as the array .base.
+        # This results in the following reference cycle (for the n-th column):
+        #
+        #    data -> data._coldefs -> data._coldefs[n] ->
+        #     data._coldefs[n].array -> data._coldefs[n].array.base -> data
+        #
+        # Because ndarray objects do not handled by Python's garbage collector
+        # the reference cycle cannot be broken.  Therefore the FITS_rec's
+        # refcount never goes to zero, its __del__ is never called, and its
+        # memory is never freed.  This didn't occur in *all* cases, but it did
+        # occur in many cases.
+        #
+        # To get around this, Column.array is no longer a simple attribute
+        # like it was previously.  Now each Column has a ._parent_fits_rec
+        # attribute which is a weakref to a FITS_rec object.  Code that
+        # previously assigned each col.array to field in a FITS_rec (as in
+        # the example a few paragraphs above) is still used, however now
+        # array.setter checks if a reference cycle will be created.  And if
+        # so, instead of saving directly to the Column's __dict__, it creates
+        # the ._prent_fits_rec weakref, and all lookups of the column's .array
+        # go through that instead.
+        #
+        # This alone does not fully solve the problem.  Because
+        # _parent_fits_rec is a weakref, if the user ever holds a reference to
+        # the Column, but deletes all references to the underlying FITS_rec,
+        # the .array attribute would suddenly start returning None instead of
+        # the array data.  This problem is resolved on FITS_rec's end.  See the
+        # note in the FITS_rec._coldefs property for the rest of the story.
+
+        # If the Columns's array is not a reference to an existing FITS_rec,
+        # then it is just stored in self.__dict__; otherwise check the
+        # _parent_fits_rec reference if it 's still available.
+        if 'array' in self.__dict__:
+            return self.__dict__['array']
+        elif self._parent_fits_rec is not None:
+            parent = self._parent_fits_rec()
+            if parent is not None:
+                return parent[self.name]
+        else:
+            return None
+
+    @array.setter
+    def array(self, array):
+        # The following looks over the bases of the given array to check if it
+        # has a ._coldefs attribute (i.e. is a FITS_rec) and that that _coldefs
+        # contains this Column itself, and would create a reference cycle if we
+        # stored the array directly in self.__dict__.
+        # In this case it instead sets up the _parent_fits_rec weakref to the
+        # underlying FITS_rec, so that array.getter can return arrays through
+        # self._parent_fits_rec().field(self.name), rather than storing a
+        # hard reference to the field like it used to.
+        base = array
+        while True:
+            if (hasattr(base, '_coldefs') and
+                    isinstance(base._coldefs, ColDefs)):
+                for col in base._coldefs:
+                    if col is self and self._parent_fits_rec is None:
+                        self._parent_fits_rec = weakref.ref(base)
+
+                        # Just in case the user already set .array to their own
+                        # array.
+                        if 'array' in self.__dict__:
+                            del self.__dict__['array']
+                        return
+
+            if getattr(base, 'base', None) is not None:
+                base = base.base
+            else:
+                break
+
+        self.__dict__['array'] = array
+
+    @array.deleter
+    def array(self):
+        try:
+            del self.__dict__['array']
+        except KeyError:
+            pass
+
+        self._parent_fits_rec = None
 
     @ColumnAttribute('TTYPE')
     def name(col, name):
@@ -678,7 +812,7 @@ class Column(NotifierMixin):
             return format, format.recformat
 
         if format in NUMPY2FITS:
-            with ignored(VerifyError):
+            with suppress(VerifyError):
                 # legit recarray format?
                 recformat = format
                 format = cls.from_recformat(format)
@@ -913,7 +1047,7 @@ class Column(NotifierMixin):
             # "optional" codes), but it is also strictly a valid ASCII
             # table format, then assume an ASCII table column was being
             # requested (the more likely case, after all).
-            with ignored(VerifyError):
+            with suppress(VerifyError):
                 format = _AsciiColumnFormat(format, strict=True)
 
             # A safe guess which reflects the existing behavior of previous
@@ -944,6 +1078,12 @@ class Column(NotifierMixin):
         else:
             format = self.format
             dims = self._dims
+
+            if dims:
+                shape = dims[:-1] if 'A' in format else dims
+                shape = (len(array),) + shape
+                array = array.reshape(shape)
+
             if 'P' in format or 'Q' in format:
                 return array
             elif 'A' in format:
@@ -961,7 +1101,7 @@ class Column(NotifierMixin):
             elif 'L' in format:
                 # boolean needs to be scaled back to storage values ('T', 'F')
                 if array.dtype == np.dtype('bool'):
-                    return np.where(array == False, ord('F'), ord('T'))
+                    return np.where(array == np.False_, ord('F'), ord('T'))
                 else:
                     return np.where(array == 0, ord('F'), ord('T'))
             elif 'X' in format:
@@ -1264,9 +1404,34 @@ class ColDefs(NotifierMixin):
 
     @lazyproperty
     def dtype(self):
-        dtypes = [f.dtype for idx, f in enumerate(self.formats)]
-        names = [n for idx, n in enumerate(self.names)]
-        return np.dtype(list(zip(names, dtypes)))
+        # Note: This previously returned a dtype that just used the raw field
+        # widths based on the format's repeat count, and did not incorporate
+        # field *shapes* as provided by TDIMn keywords.
+        # Now this incorporates TDIMn from the start, which makes *this* method
+        # a little more complicated, but simplifies code elsewhere (for example
+        # fields will have the correct shapes even in the raw recarray).
+        fields = []
+        offsets = [0]
+
+        for name, format_, dim in zip(self.names, self.formats, self._dims):
+            dt = format_.dtype
+
+            if len(offsets) < len(self.formats):
+                # Note: the size of the *original* format_ may be greater than
+                # one would expect from the number of elements determined by
+                # dim.  The FITS format allows this--the rest of the field is
+                # filled with undefined values.
+                offsets.append(offsets[-1] + dt.itemsize)
+
+            if dim:
+                if format_.format == 'A':
+                    dt = np.dtype((dt.char + str(dim[-1]), dim[:-1]))
+                else:
+                    dt = np.dtype((dt.base, dim))
+
+            fields.append((name, dt))
+
+        return nh.realign_dtype(np.dtype(fields), offsets)
 
     @lazyproperty
     def _arrays(self):
@@ -1916,10 +2081,6 @@ def _scalar_to_format(value):
     FORMATORDER.
     """
 
-    # TODO: Numpy 1.6 and up has a min_scalar_type() function that can handle
-    # this; in the meantime we have to use our own implementation (which for
-    # now is pretty naive)
-
     # First, if value is a string, try to convert to the appropriate scalar
     # value
     for type_ in (int, float, complex):
@@ -1929,22 +2090,14 @@ def _scalar_to_format(value):
         except ValueError:
             continue
 
-    if isinstance(value, int) and value in (0, 1):
-        # Could be a boolean
-        return 'L'
-    elif isinstance(value, int):
-        for char in ('B', 'I', 'J', 'K'):
-            type_ = np.dtype(FITS2NUMPY[char]).type
-            if type_(value) == value:
-                return char
-    elif isinstance(value, float):
-        # For now just assume double precision
-        return 'D'
-    elif isinstance(value, complex):
-        return 'M'
-    else:
-        return 'A' + str(len(value))
+    numpy_dtype_str = np.min_scalar_type(value).str
+    numpy_dtype_str = numpy_dtype_str[1:]  # Strip endianness
 
+    try:
+        fits_format = NUMPY2FITS[numpy_dtype_str]
+        return FITSUPCONVERTERS.get(fits_format, fits_format)
+    except KeyError:
+        return "A" + str(len(value))
 
 def _cmp_recformats(f1, f2):
     """
@@ -2003,7 +2156,14 @@ def _convert_record2fits(format):
 
     recformat, kind, dtype = _dtype_to_recformat(format)
     shape = dtype.shape
-    option = str(dtype.base.itemsize)
+    itemsize = dtype.base.itemsize
+    if dtype.char == 'U':
+        # Unicode dtype--itemsize is 4 times actual ASCII character length,
+        # which what matters for FITS column formats
+        # Use dtype.base--dtype may be a multi-dimensional dtype
+        itemsize = itemsize // 4
+
+    option = str(itemsize)
 
     ndims = len(shape)
     repeat = 1
@@ -2048,11 +2208,12 @@ def _dtype_to_recformat(dtype):
         dtype = np.dtype(dtype)
 
     kind = dtype.base.kind
-    itemsize = dtype.base.itemsize
-    recformat = kind + str(itemsize)
 
     if kind in ('U', 'S'):
         recformat = kind = 'a'
+    else:
+        itemsize = dtype.base.itemsize
+        recformat = kind + str(itemsize)
 
     return recformat, kind, dtype
 

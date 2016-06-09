@@ -16,7 +16,7 @@ from ...modeling.tests.example_models import models_1D, models_2D
 from ...modeling.tests.test_models import create_model
 
 try:
-    import scipy
+    import scipy  # pylint: disable=W0611
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
@@ -151,4 +151,3 @@ def test_dim_exception_2d():
     with pytest.raises(ValueError) as exc:
         discretize_model(f, (-10, 11))
     assert exc.value.args[0] == "y range not specified, but model is 2-d"
-
