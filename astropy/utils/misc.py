@@ -26,13 +26,14 @@ from contextlib import contextmanager
 from collections import defaultdict, OrderedDict
 
 from ..extern import six
-from ..extern.six.moves import urllib
+from ..extern.six.moves import urllib, range, zip_longest
 
 
 __all__ = ['isiterable', 'silence', 'format_exception', 'NumpyRNGContext',
            'find_api_page', 'is_path_hidden', 'walk_skip_hidden',
            'JsonCustomEncoder', 'indent', 'InheritDocstrings',
-           'OrderedDescriptor', 'OrderedDescriptorContainer', 'set_locale']
+           'OrderedDescriptor', 'OrderedDescriptorContainer', 'set_locale',
+           'ShapedLikeNDArray', 'check_broadcast', 'IncompatibleShapeError']
 
 
 def isiterable(obj):
@@ -249,7 +250,7 @@ def find_api_page(obj, version=None, openinbrowser=True, timeout=None):
         ivers, proj, vers, compr  = headerlines
         if 'The remainder of this file is compressed using zlib' not in compr:
             raise ValueError('The file downloaded from {0} does not seem to be'
-                             'the usal Sphinx objects.inv format.  Maybe it '
+                             'the usual Sphinx objects.inv format.  Maybe it '
                              'has changed?'.format(baseurl + 'objects.inv'))
 
         compressed = oiread[(idx+1):]
@@ -287,8 +288,8 @@ def signal_number_to_name(signum):
     # Since these numbers and names are platform specific, we use the
     # builtin signal module and build a reverse mapping.
 
-    signal_to_name_map = dict(
-        (k, v) for v, k in signal.__dict__.iteritems() if v.startswith('SIG'))
+    signal_to_name_map = dict((k, v) for v, k in six.iteritems(signal.__dict__)
+                              if v.startswith('SIG'))
 
     return signal_to_name_map.get(signum, 'UNKNOWN')
 
@@ -798,8 +799,7 @@ class OrderedDescriptorContainer(type):
                     obj_cls_base = descr_bases[obj.__class__]
                     descriptors[obj_cls_base].append((obj, name))
 
-            if not (isinstance(mro_cls, type(cls)) and
-                        mro_cls._inherit_descriptors_):
+            if not getattr(mro_cls, '_inherit_descriptors_', False):
                 # If _inherit_descriptors_ is undefined then we don't inherit
                 # any OrderedDescriptors from any of the base classes, and
                 # there's no reason to continue through the MRO
@@ -850,3 +850,255 @@ def set_locale(name):
                 yield
             finally:
                 locale.setlocale(locale.LC_ALL, saved)
+
+
+@six.add_metaclass(abc.ABCMeta)
+class ShapedLikeNDArray(object):
+    """Mixin class to provide shape-changing methods.
+
+    The class proper is assumed to have some underlying data, which are arrays
+    or array-like structures. It must define a ``shape`` property, which gives
+    the shape of those data, as well as an ``_apply`` method that creates a new
+    instance in which a `~numpy.ndarray` method has been applied to those.
+
+    Furthermore, for consistency with `~numpy.ndarray`, it is recommended to
+    define a setter for the ``shape`` property, which, like the
+    `~numpy.ndarray.shape` property allows in-place reshaping the internal data
+    (and, unlike the ``reshape`` method raises an exception if this is not
+    possible).
+
+    This class also defines default implementations for ``ndim`` and ``size``
+    properties, calculating those from the ``shape``.  These can be overridden
+    by subclasses if there are faster ways to obtain those numbers.
+
+    """
+
+    # Note to developers: if new methods are added here, be sure to check that
+    # they work properly with the classes that use this, such as Time and
+    # BaseRepresentation, i.e., look at their ``_apply`` methods and add
+    # relevant tests.  This is particularly important for methods that imply
+    # copies rather than views of data (see the special-case treatment of
+    # 'flatten' in Time).
+
+    @abc.abstractproperty
+    def shape(self):
+        """The shape of the instance and underlying arrays."""
+
+    @abc.abstractmethod
+    def _apply(method, *args, **kwargs):
+        """Create a new instance, with ``method`` applied to underlying data.
+
+        The method is any of the shape-changing methods for `~numpy.ndarray`
+        (``reshape``, ``swapaxes``, etc.), as well as those picking particular
+        elements (``__getitem__``, ``take``, etc.). It will be applied to the
+        underlying arrays (e.g., ``jd1`` and ``jd2`` in `~astropy.time.Time`),
+        with the results used to create a new instance.
+
+        Parameters
+        ----------
+        method : str
+            Method to be applied to the instance's internal data arrays.
+        args : tuple
+            Any positional arguments for ``method``.
+        kwargs : dict
+            Any keyword arguments for ``method``.
+
+        """
+
+    @property
+    def ndim(self):
+        """The number of dimensions of the instance and underlying arrays."""
+        return len(self.shape)
+
+    @property
+    def size(self):
+        """The size of the object, as calculated from its shape."""
+        size = 1
+        for sh in self.shape:
+            size *= sh
+        return size
+
+    @property
+    def isscalar(self):
+        return self.shape == ()
+
+    def __len__(self):
+        if self.isscalar:
+            raise TypeError("Scalar {0!r} object has no len()"
+                            .format(self.__class__.__name__))
+        return self.shape[0]
+
+    def __bool__(self):  # Python 3
+        """Any instance should evaluate to True, except when it is empty."""
+        return self.size > 0
+
+    def __nonzero__(self):  # Python 2
+        """Any instance should evaluate to True, except when it is empty."""
+        return self.size > 0
+
+    def __getitem__(self, item):
+        try:
+            return self._apply('__getitem__', item)
+        except IndexError:
+            if self.isscalar:
+                raise TypeError('scalar {0!r} object is not subscriptable.'
+                                .format(self.__class__.__name__))
+            else:
+                raise
+
+    def __iter__(self):
+        if self.isscalar:
+            raise TypeError('scalar {0!r} object is not iterable.'
+                            .format(self.__class__.__name__))
+
+        # We cannot just write a generator here, since then the above error
+        # would only be raised once we try to use the iterator, rather than
+        # upon its definition using iter(self).
+        def self_iter():
+            for idx in range(len(self)):
+                yield self[idx]
+
+        return self_iter()
+
+    def copy(self, *args, **kwargs):
+        """Return an instance containing copies of the internal data.
+
+        Parameters are as for :meth:`~numpy.ndarray.copy`.
+        """
+        return self._apply('copy', *args, **kwargs)
+
+    def reshape(self, *args, **kwargs):
+        """Returns an instance containing the same data with a new shape.
+
+        Parameters are as for :meth:`~numpy.ndarray.reshape`.  Note that it is
+        not always possible to change the shape of an array without copying the
+        data (see :func:`~numpy.reshape` documentation). If you want an error
+        to be raise if the data is copied, you should assign the new shape to
+        the shape attribute (note: this may not be implemented for all classes
+        using ``ShapedLikeNDArray``).
+        """
+        return self._apply('reshape', *args, **kwargs)
+
+    def ravel(self, *args, **kwargs):
+        """Return an instance with the array collapsed into one dimension.
+
+        Parameters are as for :meth:`~numpy.ndarray.ravel`. Note that it is
+        not always possible to unravel an array without copying the data.
+        If you want an error to be raise if the data is copied, you should
+        should assign shape ``(-1,)`` to the shape attribute.
+        """
+        return self._apply('ravel', *args, **kwargs)
+
+    def flatten(self, *args, **kwargs):
+        """Return a copy with the array collapsed into one dimension.
+
+        Parameters are as for :meth:`~numpy.ndarray.flatten`.
+        """
+        return self._apply('flatten', *args, **kwargs)
+
+    def transpose(self, *args, **kwargs):
+        """Return an instance with the data transposed.
+
+        Parameters are as for :meth:`~numpy.ndarray.transpose`.  All internal
+        data are views of the data of the original.
+        """
+        return self._apply('transpose', *args, **kwargs)
+
+    @property
+    def T(self):
+        """Return an instance with the data transposed.
+
+        Parameters are as for :attr:`~numpy.ndarray.T`.  All internal
+        data are views of the data of the original.
+        """
+        if self.ndim < 2:
+            return self
+        else:
+            return self.transpose()
+
+    def swapaxes(self, *args, **kwargs):
+        """Return an instance with the given axes interchanged.
+
+        Parameters are as for :meth:`~numpy.ndarray.swapaxes`:
+        ``axis1, axis2``.  All internal data are views of the data of the
+        original.
+        """
+        return self._apply('swapaxes', *args, **kwargs)
+
+    def diagonal(self, *args, **kwargs):
+        """Return an instance with the specified diagonals.
+
+        Parameters are as for :meth:`~numpy.ndarray.diagonal`.  All internal
+        data are views of the data of the original.
+        """
+        return self._apply('diagonal', *args, **kwargs)
+
+    def squeeze(self, *args, **kwargs):
+        """Return an instance with single-dimensional shape entries removed
+
+        Parameters are as for :meth:`~numpy.ndarray.squeeze`.  All internal
+        data are views of the data of the original.
+        """
+        return self._apply('squeeze', *args, **kwargs)
+
+    def take(self, indices, axis=None, mode='raise'):
+        """Return a new instance formed from the elements at the given indices.
+
+        Parameters are as for :meth:`~numpy.ndarray.take`, except that,
+        obviously, no output array can be given.
+        """
+        return self._apply('take', indices, axis=axis, mode=mode)
+
+
+class IncompatibleShapeError(ValueError):
+    def __init__(self, shape_a, shape_a_idx, shape_b, shape_b_idx):
+        super(IncompatibleShapeError, self).__init__(
+                shape_a, shape_a_idx, shape_b, shape_b_idx)
+
+
+def check_broadcast(*shapes):
+    """
+    Determines whether two or more Numpy arrays can be broadcast with each
+    other based on their shape tuple alone.
+
+    Parameters
+    ----------
+    *shapes : tuple
+        All shapes to include in the comparison.  If only one shape is given it
+        is passed through unmodified.  If no shapes are given returns an empty
+        `tuple`.
+
+    Returns
+    -------
+    broadcast : `tuple`
+        If all shapes are mutually broadcastable, returns a tuple of the full
+        broadcast shape.
+    """
+
+    if len(shapes) == 0:
+        return ()
+    elif len(shapes) == 1:
+        return shapes[0]
+
+    reversed_shapes = (reversed(shape) for shape in shapes)
+
+    full_shape = []
+
+    for dims in zip_longest(*reversed_shapes, fillvalue=1):
+        max_dim = 1
+        max_dim_idx = None
+        for idx, dim in enumerate(dims):
+            if dim == 1:
+                continue
+
+            if max_dim == 1:
+                # The first dimension of size greater than 1
+                max_dim = dim
+                max_dim_idx = idx
+            elif dim != max_dim:
+                raise IncompatibleShapeError(
+                    shapes[max_dim_idx], max_dim_idx, shapes[idx], idx)
+
+        full_shape.append(max_dim)
+
+    return tuple(full_shape[::-1])

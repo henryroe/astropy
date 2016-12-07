@@ -87,7 +87,7 @@ def histogram(a, bins=10, range=None, weights=None, **kwargs):
         elif bins == 'freedman':
             da, bins = freedman_bin_width(a, True)
         else:
-            raise ValueError("unrecognized bin code: '%s'" % bins)
+            raise ValueError("unrecognized bin code: '{}'".format(bins))
 
     # Now we call numpy's histogram with the resulting bin edges
     return np.histogram(a, bins=bins, range=range, weights=weights, **kwargs)
@@ -350,8 +350,8 @@ class _KnuthF(object):
         bins = self.bins(M)
         nk, bins = np.histogram(self.data, bins)
 
-        return -(self.n * np.log(M)
-                 + self.gammaln(0.5 * M)
-                 - M * self.gammaln(0.5)
-                 - self.gammaln(self.n + 0.5 * M)
-                 + np.sum(self.gammaln(nk + 0.5)))
+        return -(self.n * np.log(M) +
+                 self.gammaln(0.5 * M) -
+                 M * self.gammaln(0.5) -
+                 self.gammaln(self.n + 0.5 * M) +
+                 np.sum(self.gammaln(nk + 0.5)))

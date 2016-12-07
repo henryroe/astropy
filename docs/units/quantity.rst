@@ -19,8 +19,6 @@ to represent 15 m/s:
     >>> 15 * u.m / u.s
     <Quantity 15.0 m / s>
 
-.. note:: |quantity| objects are converted to float by default.
-
 As another example:
 
     >>> 1.25 / u.s
@@ -58,6 +56,11 @@ Finally, the current unit and value can be accessed via the
     Unit("m / s")
     >>> q.value
     2.5
+
+.. note:: |quantity| objects are converted to float by default.  Furthermore,
+	  any data passed in are copied, which for large arrays may not be
+	  optimal.  One can instead obtain a `~numpy.ndarray.view` by
+	  passing ``copy=False`` to |quantity|.
 
 Converting to different units
 -----------------------------
@@ -368,6 +371,17 @@ Under Python 3 you can use the annotations syntax to provide the units:
 
     >>> myfunction(100*u.arcsec)  # doctest: +SKIP
     Unit("arcsec")
+
+Representing vectors with units
+-------------------------------
+
+|quantity| objects can, like numpy arrays, be used to represent vectors or
+matrices by assigning specific dimensions to represent the coordinates or
+matrix elements, but that implies tracking those dimensions carefully. For
+vectors, one can use instead the representations underlying coordinates, which
+allow one to use representations other than cartesian (such as spherical or
+cylindrical), as well as simple vector arithmetic.  For details, see
+:ref:`astropy-coordinates-representations`.
 
 Known issues with conversion to numpy arrays
 --------------------------------------------

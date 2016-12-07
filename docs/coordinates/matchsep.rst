@@ -94,8 +94,8 @@ positional offsets (e.g., for astrometry)::
     >>> target = ICRS(11*u.deg, 46*u.deg)
     >>> target.transform_to(SkyOffsetFrame(origin=center))  # doctest: +FLOAT_CMP
     <SkyOffsetICRS Coordinate (rotation=0.0 deg, origin=<ICRS Coordinate: (ra, dec) in deg
-        (10.0, 45.0)>): (lon, lat) in deg
-        (0.69474685, 1.00428706)>
+        ( 10.,  45.)>): (lon, lat) in deg
+        ( 0.69474685,  1.00428706)>
 
 
 Alternatively, the convenience method
@@ -106,12 +106,12 @@ frame from an already-existing |SkyCoord|::
     >>> aframe = center.skyoffset_frame()
     >>> target.transform_to(aframe)  # doctest: +FLOAT_CMP
     <SkyOffsetICRS Coordinate (rotation=0.0 deg, origin=<ICRS Coordinate: (ra, dec) in deg
-        (10.0, 45.0)>): (lon, lat) in deg
-        (0.69474685, 1.00428706)>
+        ( 10.,  45.)>): (lon, lat) in deg
+        ( 0.69474685,  1.00428706)>
     >>> other = SkyCoord(9*u.deg, 44*u.deg, frame='fk5')
     >>> other.transform_to(aframe)  # doctest: +FLOAT_CMP
     <SkyCoord (SkyOffsetICRS: rotation=0.0 deg, origin=<ICRS Coordinate: (ra, dec) in deg
-        (10.0, 45.0)>): (lon, lat) in deg
+        ( 10.,  45.)>): (lon, lat) in deg
         (-0.71943945, -0.99556216)>
 
 .. note ::
@@ -123,6 +123,22 @@ frame from an already-existing |SkyCoord|::
     things like type-checking, because something like
     ``SkyOffsetFrame(origin=ICRS(...)).__class__ is SkyOffsetFrame`` will
     *not* be ``True``, as it would be for most classes.
+
+This same frame is also useful as a tool for defining frames that are relative
+to a specific known object, useful for hierarchical physical systems like galaxy
+groups.  For example, objects around M31 are sometimes shown in a coordinate
+frame aligned with standard ICRA RA/Dec, but on M31::
+
+    >>> m31 = SkyCoord(10.6847083*u.deg, 41.26875*u.deg, frame='icrs')
+    >>> ngc147 = SkyCoord(8.3005*u.deg, 48.5087389*u.deg, frame='icrs')
+    >>> ngc147_inm31 = ngc147.transform_to(m31.skyoffset_frame())
+    >>> xi, eta = ngc147_inm31.lon, ngc147_inm31.lat
+    >>> xi  # doctest: +FLOAT_CMP
+    <Longitude -1.5920694752086249 deg>
+    >>> eta  # doctest: +FLOAT_CMP
+    <Latitude 7.261837574183891 deg>
+
+
 
 .. _astropy-coordinates-matching:
 

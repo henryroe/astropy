@@ -20,7 +20,7 @@ from ... import table
 from ... import units as u
 from .conftest import MaskedTable
 
-from ...extern.six.moves import zip as izip, cStringIO as StringIO
+from ...extern.six.moves import zip, range, cStringIO as StringIO
 
 try:
     with ignore_warnings(DeprecationWarning):
@@ -339,7 +339,7 @@ class TestColumnAccess():
     def test_itercols(self, table_types):
         names = ['a', 'b', 'c']
         t = table_types.Table([[1], [2], [3]], names=names)
-        for name, col in izip(names, t.itercols()):
+        for name, col in zip(names, t.itercols()):
             assert name == col.name
             assert isinstance(col, table_types.Column)
 
@@ -1711,6 +1711,29 @@ def test_replace_column_qtable():
     assert t.colnames == ['a', 'b']
     assert t['a'].info.meta is None
     assert t['a'].info.format is None
+
+def test_replace_update_column_via_setitem():
+    """
+    Test table update like ``t['a'] = value``.  This leverages off the
+    already well-tested ``replace_column`` and in-place update
+    ``t['a'][:] = value``, so this testing is fairly light.
+    """
+    a = [1, 2] * u.m
+    b = [3, 4]
+    t = table.QTable([a, b], names=['a', 'b'])
+    assert isinstance(t['a'], u.Quantity)
+
+    # Inplace update
+    ta = t['a']
+    t['a'] = 5 * u.m
+    assert np.all(t['a'] == [5, 5] * u.m)
+    assert t['a'] is ta
+
+    # Replace
+    t['a'] = [5, 6]
+    assert np.all(t['a'] == [5, 6])
+    assert isinstance(t['a'], table.Column)
+    assert t['a'] is not ta
 
 def test_primary_key_is_inherited():
     """Test whether a new Table inherits the primary_key attribute from

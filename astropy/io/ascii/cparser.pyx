@@ -45,8 +45,8 @@ cdef extern from "src/tokenizer.h":
 
     ctypedef struct tokenizer_t:
         char *source           # single string containing all of the input
-        int source_len         # length of the input
-        int source_pos         # current index in source for tokenization
+        size_t source_len       # length of the input
+        size_t source_pos       # current index in source for tokenization
         char delimiter         # delimiter character
         char comment           # comment character
         char quotechar         # quote character
@@ -89,7 +89,7 @@ cdef extern from "src/tokenizer.h":
     double str_to_double(tokenizer_t *self, char *str)
     void start_iteration(tokenizer_t *self, int col)
     char *next_field(tokenizer_t *self, int *size)
-    char *get_line(char *ptr, int *len, int map_len)
+    char *get_line(char *ptr, size_t *len, size_t map_len)
     void reset_comments(tokenizer_t *self)
 
 cdef extern from "Python.h":
@@ -151,8 +151,8 @@ cdef class FileString:
         """
         cdef char *ptr = <char *>self.mmap_ptr
         cdef char *tmp
-        cdef int line_len
-        cdef int map_len = len(self.mmap)
+        cdef size_t line_len
+        cdef size_t map_len = len(self.mmap)
 
         while ptr:
             tmp = get_line(ptr, &line_len, map_len)
@@ -273,7 +273,7 @@ cdef class CParser:
                 self.tokenizer.source = <char *>fstring.mmap_ptr
                 self.source_ptr = <char *>fstring.mmap_ptr
                 self.source = fstring
-                self.tokenizer.source_len = len(fstring)
+                self.tokenizer.source_len = <size_t>len(fstring)
                 return
             # Otherwise, source is the actual data so we leave it be
         elif hasattr(source, 'read'): # file-like object
@@ -282,7 +282,7 @@ cdef class CParser:
         elif isinstance(source, FileString):
             self.tokenizer.source = <char *>((<FileString>source).mmap_ptr)
             self.source = source
-            self.tokenizer.source_len = len(source)
+            self.tokenizer.source_len = <size_t>len(source)
             return
         else:
             try:
@@ -296,7 +296,7 @@ cdef class CParser:
         # encode in ASCII for char * handling
         self.source_bytes = self.source.encode('ascii')
         self.tokenizer.source = self.source_bytes
-        self.tokenizer.source_len = len(self.source_bytes)
+        self.tokenizer.source_len = <size_t>len(self.source_bytes)
 
     def read_header(self):
         self.tokenizer.source_pos = 0
@@ -322,7 +322,7 @@ cdef class CParser:
                         break # end of string
                 else:
                     name += chr(c)
-            self.width = len(self.header_names)
+            self.width = <int>len(self.header_names)
 
         else:
             # Get number of columns from first data row
@@ -344,7 +344,7 @@ cdef class CParser:
             self.header_names = ['col{0}'.format(i + 1) for i in range(self.width)]
 
         if self.names:
-            self.width = len(self.names)
+            self.width = <int>len(self.names)
         else:
             self.names = self.header_names
 
@@ -355,7 +355,7 @@ cdef class CParser:
         if self.exclude_names is not None:
             self.use_cols.difference_update(self.exclude_names)
 
-        self.width = len(self.names)
+        self.width = <int>len(self.names)
 
     def read(self, try_int, try_float, try_string):
         if self.parallel:
@@ -371,7 +371,7 @@ cdef class CParser:
         if self.data_end is not None and self.data_end >= 0:
             data_end = max(self.data_end - self.data_start, 0) # read nothing if data_end < 0
 
-        if tokenize(self.tokenizer, data_end, 0, len(self.names)) != 0:
+        if tokenize(self.tokenizer, data_end, 0, <int>len(self.names)) != 0:
             self.raise_error("an error occurred while parsing table data")
         elif self.tokenizer.num_rows == 0: # no data
             return ([np.array([], dtype=np.int_)] * self.width, [])
@@ -383,7 +383,7 @@ cdef class CParser:
                                   try_string, num_rows)
 
     def _read_parallel(self, try_int, try_float, try_string):
-        cdef int source_len = len(self.source)
+        cdef size_t source_len = <size_t>len(self.source)
         self.tokenizer.source_pos = 0
 
         if skip_lines(self.tokenizer, self.data_start, 0) != 0:
@@ -397,17 +397,20 @@ cdef class CParser:
         except (ImportError, NotImplementedError, AttributeError, OSError):
             self.raise_error("shared semaphore implementation required "
                              "but not available")
-        cdef int offset = self.tokenizer.source_pos
+        cdef size_t offset = self.tokenizer.source_pos
 
         if offset == source_len: # no data
             return (dict((name, np.array([], dtype=np.int_)) for name in
                          self.names), [])
 
-        cdef int chunksize = math.ceil((source_len - offset) / float(N))
+        cdef long chunksize = math.ceil((source_len - offset) / float(N))
         cdef list chunkindices = [offset]
 
         # This queue is used to signal processes to reconvert if necessary
         reconvert_queue = multiprocessing.Queue()
+
+        cdef int i
+        cdef size_t index
 
         for i in range(1, N):
             index = max(offset + chunksize * i, chunkindices[i - 1])
@@ -788,7 +791,7 @@ def _read_chunk(CParser self, start, end, try_int,
     data = None
     err = None
 
-    if tokenize(chunk_tokenizer, -1, 0, len(self.names)) != 0:
+    if tokenize(chunk_tokenizer, -1, 0, <int>len(self.names)) != 0:
         err = (chunk_tokenizer.code, chunk_tokenizer.num_rows)
     if chunk_tokenizer.num_rows == 0: # no data
         data = dict((name, np.array([], np.int_)) for name in self.get_names())
@@ -913,7 +916,7 @@ cdef class FastWriter:
                     self.format_funcs.append(None)
                 else:
                     self.format_funcs.append(pprint._format_funcs.get(
-                        col.format, pprint._auto_format_func))
+                        (col.format, col.name), pprint.get_auto_format_func(col.name)))
                 # col is a numpy.ndarray, so we convert it to
                 # an ordinary list because csv.writer will call
                 # np.array_str() on each numpy value, which is
@@ -966,8 +969,8 @@ cdef class FastWriter:
         # or fail to take advantage of the speed boost of writerows()
         # over writerow().
         cdef int N = 100
-        cdef int num_cols = len(self.use_names)
-        cdef int num_rows = len(self.table)
+        cdef int num_cols = <int>len(self.use_names)
+        cdef int num_rows = <int>len(self.table)
         # cache string columns beforehand
         cdef set string_rows = set([i for i, type in enumerate(self.types) if
                                     type == 'S'])
@@ -982,7 +985,7 @@ cdef class FastWriter:
 
                 if orig_field is None: # tolist() converts ma.masked to None
                     field = core.masked
-                    rows[i % N][j] = '--'
+                    rows[i % N][j] = ''
 
                 elif self.format_funcs[j] is not None:
                     field = self.format_funcs[j](self.formats[j], orig_field)

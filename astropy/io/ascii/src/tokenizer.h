@@ -10,6 +10,7 @@
 #include <math.h>
 #include <float.h>
 #include <ctype.h>
+#include <sys/types.h>
 
 #ifdef _MSC_VER
     #define inline __inline
@@ -39,7 +40,6 @@ typedef enum
     QUOTED_FIELD,
     QUOTED_FIELD_NEWLINE,
     COMMENT,
-    CARRIAGE_RETURN
 } tokenizer_state;
 
 typedef enum
@@ -55,8 +55,8 @@ typedef enum
 typedef struct
 {
     char *source;          // single string containing all of the input
-    int source_len;        // length of the input
-    int source_pos;        // current index in source for tokenization
+    size_t source_len;      // length of the input
+    size_t source_pos;      // current index in source for tokenization
     char delimiter;        // delimiter character
     char comment;          // comment character
     char quotechar;        // quote character
@@ -106,7 +106,7 @@ double xstrtod(const char *str, char **endptr, char decimal,
 void start_iteration(tokenizer_t *self, int col);
 char *next_field(tokenizer_t *self, int *size);
 long file_len(FILE *fhandle);
-char *get_line(char *ptr, int *len, int map_len);
+char *get_line(char *ptr, size_t *len, size_t map_len);
 void reset_comments(tokenizer_t *self);
 
 #endif

@@ -1,11 +1,14 @@
 # The purpose of these tests are to ensure that calling ufuncs with quantities
 # returns quantities with the right units, or raises exceptions.
 
+import warnings
+
 import numpy as np
 from numpy.testing.utils import assert_allclose
 
 from ... import units as u
 from ...tests.helper import pytest, raises
+from ...extern.six.moves import zip
 
 
 class TestUfuncCoverage(object):
@@ -60,6 +63,14 @@ class TestQuantityTrigonometricFuncs(object):
             np.arcsin(3. * u.m)
         assert exc.value.args[0] == ("Can only apply 'arcsin' function to "
                                      "dimensionless quantities")
+
+    def test_arcsin_no_warning_on_unscaled_quantity(self):
+        a = 15 * u.kpc
+        b = 27 * u.pc
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings('error')
+            np.arcsin(b/a)
 
     def test_cos_scalar(self):
         q = np.cos(np.pi / 3. * u.radian)
@@ -286,6 +297,15 @@ class TestQuantityMathFuncs(object):
                       == np.array([1., 8., 27.]) * u.m ** 3)
         # regression check on #1696
         assert np.all(np.power(np.arange(4.) * u.m, 0.) ==
+                      1. * u.dimensionless_unscaled)
+
+    # float_power only introduced in numpy 1.12
+    @pytest.mark.skipif("not hasattr(np, 'float_power')")
+    def test_float_power_array(self):
+        assert np.all(np.float_power(np.array([1., 2., 3.]) * u.m, 3.)
+                      == np.array([1., 8., 27.]) * u.m ** 3)
+        # regression check on #1696
+        assert np.all(np.float_power(np.arange(4.) * u.m, 0.) ==
                       1. * u.dimensionless_unscaled)
 
     @raises(ValueError)

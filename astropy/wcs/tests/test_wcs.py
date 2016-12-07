@@ -18,11 +18,12 @@ from numpy.testing import (
 
 from ...tests.helper import raises, catch_warnings, pytest
 from ... import wcs
-from .. import _wcs  # pylint: disable=W0611
+from .. import _wcs
 from ...utils.data import (
     get_pkg_data_filenames, get_pkg_data_contents, get_pkg_data_filename)
 from ...utils.misc import NumpyRNGContext
 from ...io import fits
+from ...extern.six.moves import range
 
 
 # test_maps() is a generator
@@ -69,8 +70,8 @@ def test_maps():
 
     if len(hdr_file_list) != n_data_files:
         assert False, (
-            "test_maps has wrong number data files: found %d, expected "
-            " %d" % (len(hdr_file_list), n_data_files))
+            "test_maps has wrong number data files: found {}, expected "
+            " {}".format(len(hdr_file_list), n_data_files))
         # b.t.w.  If this assert happens, py.test reports one more test
         # than it would have otherwise.
 
@@ -114,8 +115,8 @@ def test_spectra():
 
     if len(hdr_file_list) != n_data_files:
         assert False, (
-            "test_spectra has wrong number data files: found %d, expected "
-            " %d" % (len(hdr_file_list), n_data_files))
+            "test_spectra has wrong number data files: found {}, expected "
+            " {}".format(len(hdr_file_list), n_data_files))
         # b.t.w.  If this assert happens, py.test reports one more test
         # than it would have otherwise.
 
@@ -594,8 +595,28 @@ def test_footprint_to_file(tmpdir):
                  'CTYPE2': 'DEC--ZPN', 'CRUNIT2': 'deg',
                  'CRPIX2': 3.0453999e+03, 'CRVAL2': 4.388538000000e+01,
                  'PV2_1': 1., 'PV2_3': 220.})
-    # Just check that this doesn't raise an exception:
-    w.footprint_to_file(str(tmpdir.join('test.txt')))
+
+    testfile = str(tmpdir.join('test.txt'))
+    w.footprint_to_file(testfile)
+
+    with open(testfile, 'r') as f:
+        lines = f.readlines()
+
+    assert len(lines) == 4
+    assert lines[2] == 'ICRS\n'
+    assert 'color=green' in lines[3]
+
+    w.footprint_to_file(testfile, coordsys='FK5', color='red')
+
+    with open(testfile, 'r') as f:
+        lines = f.readlines()
+
+    assert len(lines) == 4
+    assert lines[2] == 'FK5\n'
+    assert 'color=red' in lines[3]
+
+    with pytest.raises(ValueError):
+        w.footprint_to_file(testfile, coordsys='FOO')
 
 
 def test_validate_faulty_wcs():
@@ -838,6 +859,7 @@ def test_hst_wcs():
     assert w.sip.bp_order == 0
     assert_array_equal(w.sip.crpix, [2048., 1024.])
     wcs.WCS(hdulist[1].header, hdulist)
+    hdulist.close()
 
 
 def test_list_naxis():
@@ -860,6 +882,7 @@ def test_list_naxis():
     w = wcs.WCS(content, naxis=['spectral'])
     assert w.naxis == 0
     assert w.wcs.naxis == 0
+    hdulist.close()
 
 
 def test_sip_broken():
@@ -879,9 +902,11 @@ def test_no_truncate_crval():
     w.wcs.cdelt = [1e-3, 1e-3, 1e8]
     w.wcs.ctype = ['RA---TAN', 'DEC--TAN', 'FREQ']
     w.wcs.set()
+
+    header = w.to_header()
     for ii in range(3):
-        assert w.to_header()['CRVAL{0}'.format(ii + 1)] == w.wcs.crval[ii]
-        assert w.to_header()['CDELT{0}'.format(ii + 1)] == w.wcs.cdelt[ii]
+        assert header['CRVAL{0}'.format(ii + 1)] == w.wcs.crval[ii]
+        assert header['CDELT{0}'.format(ii + 1)] == w.wcs.cdelt[ii]
 
 
 def test_no_truncate_crval_try2():
@@ -896,9 +921,29 @@ def test_no_truncate_crval_try2():
     w.wcs.crpix = [1, 1, 1]
     w.wcs.restfrq = 2.34e11
     w.wcs.set()
+
+    header = w.to_header()
     for ii in range(3):
-        assert w.to_header()['CRVAL{0}'.format(ii + 1)] == w.wcs.crval[ii]
-        assert w.to_header()['CDELT{0}'.format(ii + 1)] == w.wcs.cdelt[ii]
+        assert header['CRVAL{0}'.format(ii + 1)] == w.wcs.crval[ii]
+        assert header['CDELT{0}'.format(ii + 1)] == w.wcs.cdelt[ii]
+
+
+def test_no_truncate_crval_p17():
+    """
+    Regression test for https://github.com/astropy/astropy/issues/5162
+    """
+    w = wcs.WCS(naxis=2)
+    w.wcs.crval = [50.1234567890123456, 50.1234567890123456]
+    w.wcs.cdelt = [1e-3, 1e-3]
+    w.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    w.wcs.set()
+
+    header = w.to_header()
+    assert header['CRVAL1'] != w.wcs.crval[0]
+    assert header['CRVAL2'] != w.wcs.crval[1]
+    header = w.to_header(relax=wcs.WCSHDO_P17)
+    assert header['CRVAL1'] == w.wcs.crval[0]
+    assert header['CRVAL2'] == w.wcs.crval[1]
 
 
 def test_no_truncate_using_compare():
@@ -929,9 +974,10 @@ def test_passing_ImageHDU():
     wcs_hdu = wcs.WCS(hdulist[1])
     wcs_header = wcs.WCS(hdulist[1].header)
     assert wcs_hdu.wcs.compare(wcs_header.wcs)
+    hdulist.close()
 
 
-def inconsistent_sip():
+def test_inconsistent_sip():
     """
     Test for #4814
     """
@@ -939,39 +985,40 @@ def inconsistent_sip():
     w = wcs.WCS(hdr)
     newhdr = w.to_header(relax=None)
     # CTYPE should not include "-SIP" if relax is None
-    assert(all([ctyp[-4 :] != '-SIP' for ctyp in self.wcs.ctype]))
+    wnew = wcs.WCS(newhdr)
+    assert all(not ctyp.endswith('-SIP') for ctyp in wnew.wcs.ctype)
     newhdr = w.to_header(relax=False)
     assert('A_0_2' not in newhdr)
     # CTYPE should not include "-SIP" if relax is False
-    assert(all([ctyp[-4 :] != '-SIP' for ctyp in self.wcs.ctype]))
+    wnew = wcs.WCS(newhdr)
+    assert all(not ctyp.endswith('-SIP') for ctyp in wnew.wcs.ctype)
     newhdr = w.to_header(key="C")
     assert('A_0_2' not in newhdr)
     # Test writing header with a different key
-    assert(all([ctyp[-4 :] != '-SIP' for ctyp in self.wcs.ctype]))
+    wnew = wcs.WCS(newhdr, key='C')
+    assert all(not ctyp.endswith('-SIP') for ctyp in wnew.wcs.ctype)
     newhdr = w.to_header(key=" ")
     # Test writing a primary WCS to header
-    assert(all([ctyp[-4 :] != '-SIP' for ctyp in self.wcs.ctype]))
+    wnew = wcs.WCS(newhdr)
+    assert all(not ctyp.endswith('-SIP') for ctyp in wnew.wcs.ctype)
     # Test that "-SIP" is kept into CTYPE if relax=True and
     # "-SIP" was in the original header
     newhdr = w.to_header(relax=True)
-    assert(all([ctyp[-4 :] == '-SIP' for ctyp in self.wcs.ctype]))
+    wnew = wcs.WCS(newhdr)
+    assert all(ctyp.endswith('-SIP') for ctyp in wnew.wcs.ctype)
     assert('A_0_2' in newhdr)
-    # Test that SIP coefficients are aslo written out.
-    wtest = WCS(newhdr)
-    assert wtest.sip is not None
+    # Test that SIP coefficients are also written out.
+    assert wnew.sip is not None
     ########## broken header ###########
     # Test that "-SIP" is added to CTYPE if relax=True and
-    # "-SIP" was not in the original header
-    hdr['CTYPE1'] = 'RA---TAN'
-    w = WCS(hdr)
+    # "-SIP" was not in the original header but SIP coefficients
+    # are present.
+    w = wcs.WCS(hdr)
+    w.wcs.ctype = ['RA---TAN', 'DEC--TAN']
     newhdr = w.to_header(relax=True)
-    assert(all([ctyp[-4 :] == '-SIP' for ctyp in self.wcs.ctype]))
-    del hdr['CTYPE2']
-    newhdr = w.to_header(relax=True)
-    assert(all([ctyp[-4 :] == '-SIP' for ctyp in self.wcs.ctype]))
-    w = wcs.WCS()
-    newhdr = w.to_header()
-    assert('CTYPE1' not in newhdr)
+    wnew = wcs.WCS(newhdr)
+    assert all(ctyp.endswith('-SIP') for ctyp in wnew.wcs.ctype)
+
 
 def test_bounds_check():
     """Test for #4957"""
@@ -984,3 +1031,48 @@ def test_bounds_check():
     ra, dec = w.wcs_pix2world(300,0,0)
     assert_allclose(ra, -180)
     assert_allclose(dec, -30)
+
+
+def test_naxis():
+    w = wcs.WCS(naxis=2)
+    w.wcs.crval = [1, 1]
+    w.wcs.cdelt = [0.1, 0.1]
+    w.wcs.crpix = [1, 1]
+    w._naxis = [1000, 500]
+
+    assert w._naxis1 == 1000
+    assert w._naxis2 == 500
+
+    w._naxis1 = 99
+    w._naxis2 = 59
+    assert w._naxis == [99, 59]
+
+
+def test_sip_with_altkey():
+    """
+    Test that when creating a WCS object using a key, CTYPE with
+    that key is looked at and not the primary CTYPE.
+    fix for #5443.
+    """
+    with fits.open(get_pkg_data_filename('data/sip.fits')) as f:
+        w = wcs.WCS(f[0].header)
+    # create a header with two WCSs.
+    h1 = w.to_header(relax=True, key='A')
+    h2 = w.to_header(relax=False)
+    h1['CTYPE1A'] = "RA---SIN-SIP"
+    h1['CTYPE2A'] = "DEC--SIN-SIP"
+    h1.update(h2)
+    w = wcs.WCS(h1, key='A')
+    assert (w.wcs.ctype == np.array(['RA---SIN-SIP', 'DEC--SIN-SIP'])).all()
+
+
+def test_to_fits_1():
+    """
+    Test to_fits() with LookupTable distortion.
+    """
+    fits_name = get_pkg_data_filename('data/dist.fits')
+    w = wcs.WCS(fits_name)
+    wfits = w.to_fits()
+    assert isinstance(wfits, fits.HDUList)
+    assert isinstance(wfits[0], fits.PrimaryHDU)
+    assert isinstance(wfits[1], fits.ImageHDU)

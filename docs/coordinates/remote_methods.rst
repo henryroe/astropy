@@ -14,7 +14,7 @@ for a particular named object::
     >>> from astropy.coordinates import SkyCoord
     >>> SkyCoord.from_name("M42")  # doctest: +REMOTE_DATA +FLOAT_CMP
     <SkyCoord (ICRS): (ra, dec) in deg
-        (83.82208, -5.39111)>
+        ( 83.82208, -5.39111)>
 
 The second is the :class:`~astropy.coordinates.EarthLocation` :meth:`~astropy.coordinates.EarthLocation.of_site` method, which
 provides a similar quick way to get an
@@ -44,7 +44,7 @@ While these methods are convenient, there are several considerations to take int
 
   We can then view the actual cartesian coordinates for the observatory:
 
-    >>> loc  # doctest: +REMOTE_DATA
+    >>> loc  # doctest: +REMOTE_DATA +FLOAT_CMP
     <EarthLocation (-1994502.6043061386, -5037538.54232911, 3358104.9969029757) m>
 
   This can then easily be converted to code::

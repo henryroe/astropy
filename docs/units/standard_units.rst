@@ -1,3 +1,5 @@
+.. _doc_standard_units:
+
 Standard units
 ==============
 
@@ -45,6 +47,8 @@ all the existing predefined units of a given type::
     t            | 1000 kg         | tonne                            ,
     u            | 1.66054e-27 kg  | Da, Dalton                       ,
   ]
+
+.. _doc_dimensionless_unit:
 
 The dimensionless unit
 ----------------------
@@ -141,13 +145,15 @@ enable additional units::
     >>> from astropy import units as u
     >>> from astropy.units import imperial
     >>> with imperial.enable():
-    ...     u.m.find_equivalent_units()  # doctest: +SKIP
+    ...     print(u.m.find_equivalent_units())
+          Primary name | Unit definition | Aliases
     ...
 
 To enable just specific units, use `~astropy.units.add_enabled_units`::
 
     >>> from astropy import units as u
     >>> from astropy.units import imperial
-    >>> with u.add_enabled_units_context([imperial.knot]):
-    ...     u.m.find_equivalent_units()  # doctest: +SKIP
+    >>> with u.add_enabled_units([imperial.knot]):
+    ...     print(u.m.find_equivalent_units())
+          Primary name | Unit definition | Aliases
     ...

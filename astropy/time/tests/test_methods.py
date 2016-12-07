@@ -2,11 +2,14 @@
 
 # TEST_UNICODE_LITERALS
 import itertools
+import copy
 import numpy as np
 
 from .. import Time
 from ...tests.helper import pytest
 from ...utils.compat.numpycompat import NUMPY_LT_1_9
+from ...utils.compat.numpy import broadcast_to as np_broadcast_to
+
 
 class TestManipulation():
     """Manipulation of Time objects, ensuring attributes are done correctly."""
@@ -17,6 +20,9 @@ class TestManipulation():
         self.t0 = Time(mjd[:, np.newaxis] + frac, format='mjd', scale='utc')
         self.t1 = Time(mjd[:, np.newaxis] + frac, format='mjd', scale='utc',
                        location=('45d', '50d'))
+        self.t2 = Time(mjd[:, np.newaxis] + frac, format='mjd', scale='utc',
+                       location=(np.arange(len(frac)), np.arange(len(frac))))
+        # Note: location is along last axis only.
         self.t2 = Time(mjd[:, np.newaxis] + frac, format='mjd', scale='utc',
                        location=(np.arange(len(frac)), np.arange(len(frac))))
 
@@ -172,6 +178,10 @@ class TestManipulation():
         t0_reshape_t = t0_reshape.T
         with pytest.raises(AttributeError):
             t0_reshape_t.shape = (10, 5)
+        # check no shape was changed.
+        assert t0_reshape_t.shape == t0_reshape.T.shape
+        assert t0_reshape_t.jd1.shape == t0_reshape.T.shape
+        assert t0_reshape_t.jd2.shape == t0_reshape.T.shape
         t1_reshape = self.t1.copy()
         t1_reshape.shape = (2, 5, 5)
         assert t1_reshape.shape == (2, 5, 5)
@@ -179,16 +189,25 @@ class TestManipulation():
         # location is a single element, so its shape should not change.
         assert t1_reshape.location.shape == ()
         # For reshape(5, 2, 5), the location array can remain the same.
-        t2_reshape = self.t2.copy()
-        t2_reshape.shape = (5, 2, 5)
-        assert t2_reshape.shape == (5, 2, 5)
-        assert np.all(t2_reshape.jd1 == self.t2.jd1.reshape(5, 2, 5))
-        assert t2_reshape.location.shape == t2_reshape.shape
-        # But for reshape(5, 5, 2), location would need to be copied, so this
+        # Note that we need to work directly on self.t2 here, since any
+        # copy would cause location to have the full shape.
+        self.t2.shape = (5, 2, 5)
+        assert self.t2.shape == (5, 2, 5)
+        assert self.t2.jd1.shape == (5, 2, 5)
+        assert self.t2.jd2.shape == (5, 2, 5)
+        assert self.t2.location.shape == (5, 2, 5)
+        assert self.t2.location.strides == (0, 0, 24)
+        # But for reshape(50), location would need to be copied, so this
         # should fail.
-        t2_reshape_t = t2_reshape.T
+        oldshape = self.t2.shape
         with pytest.raises(AttributeError):
-            t2_reshape_t.shape = (5, 5, 2)
+            self.t2.shape = (50,)
+        # check no shape was changed.
+        assert self.t2.jd1.shape == oldshape
+        assert self.t2.jd2.shape == oldshape
+        assert self.t2.location.shape == oldshape
+        # reset t2 to its original.
+        self.setup()
 
     def test_squeeze(self):
         t0_squeeze = self.t0.reshape(5, 1, 2, 1, 5).squeeze()
@@ -243,6 +262,25 @@ class TestManipulation():
         assert t2_take2.shape == (2,)
         assert np.all(t2_take2.jd1 == self.t2.jd1.take((5, 15)))
         assert t2_take2.location.shape == t2_take2.shape
+
+    def test_broadcast(self):
+        """Test using a callable method."""
+        t0_broadcast = self.t0._apply(np_broadcast_to, shape=(3, 10, 5))
+        assert t0_broadcast.shape == (3, 10, 5)
+        assert np.all(t0_broadcast.jd1 == self.t0.jd1)
+        assert np.may_share_memory(t0_broadcast.jd1, self.t0.jd1)
+        assert t0_broadcast.location is None
+        t1_broadcast = self.t1._apply(np_broadcast_to, shape=(3, 10, 5))
+        assert t1_broadcast.shape == (3, 10, 5)
+        assert np.all(t1_broadcast.jd1 == self.t1.jd1)
+        assert np.may_share_memory(t1_broadcast.jd1, self.t1.jd1)
+        assert t1_broadcast.location is self.t1.location
+        t2_broadcast = self.t2._apply(np_broadcast_to, shape=(3, 10, 5))
+        assert t2_broadcast.shape == (3, 10, 5)
+        assert np.all(t2_broadcast.jd1 == self.t2.jd1)
+        assert np.may_share_memory(t2_broadcast.jd1, self.t2.jd1)
+        assert t2_broadcast.location.shape == t2_broadcast.shape
+        assert np.may_share_memory(t2_broadcast.location, self.t2.location)
 
 
 class TestArithmetic():
@@ -343,3 +381,17 @@ class TestArithmetic():
         # Bit superfluous, but good to check.
         assert np.all(self.t0.sort(-1)[:, :, 0] == self.t0.min(-1))
         assert np.all(self.t0.sort(-1)[:, :, -1] == self.t0.max(-1))
+
+
+def test_regression():
+    # For #5225, where a time with a single-element delta_ut1_utc could not
+    # be copied, flattened, or ravelled. (For copy, it is in test_basic.)
+    t = Time(49580.0, scale='tai', format='mjd')
+    t_ut1 = t.ut1
+    t_ut1_copy = copy.deepcopy(t_ut1)
+    assert type(t_ut1_copy.delta_ut1_utc) is float
+    t_ut1_flatten = t_ut1.flatten()
+    assert type(t_ut1_flatten.delta_ut1_utc) is float
+    t_ut1_ravel = t_ut1.ravel()
+    assert type(t_ut1_ravel.delta_ut1_utc) is float
+    assert t_ut1_copy.delta_ut1_utc == t_ut1.delta_ut1_utc

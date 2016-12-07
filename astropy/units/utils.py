@@ -33,7 +33,7 @@ def _get_first_sentence(s):
     returns.
     """
 
-    x = re.match(".*?\S\.\s", s)
+    x = re.match(r".*?\S\.\s", s)
     if x is not None:
         s = x.group(0)
     return s.replace('\n', ' ')
@@ -177,7 +177,7 @@ def validate_power(p, support_tuples=False):
     else:
         try:
             p = float(p)
-        except:
+        except Exception:
             if not np.isscalar(p):
                 raise ValueError("Quantities and Units may only be raised "
                                  "to a scalar power")
@@ -193,7 +193,7 @@ def validate_power(p, support_tuples=False):
             # operations are much faster.
             pass
         else:
-            # Convert floats indistinguisable from a rational to Fraction.
+            # Convert floats indistinguishable from a rational to Fraction.
             # Here, we do not need to test values that are divisors of a higher
             # number, such as 3, since it is already addressed by 6.
             for i in (10, 9, 7, 6):

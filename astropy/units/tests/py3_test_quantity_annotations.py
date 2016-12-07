@@ -10,8 +10,8 @@ from ...tests.helper import pytest
 
 
 def py3only(func):
-    if not six.PY3:
-        return pytest.mark.skipif('not six.PY3')(func)
+    if six.PY2:
+        return pytest.mark.skipif('six.PY2')(func)
     else:
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -105,7 +105,7 @@ def test_wrong_unit3():
 
     with pytest.raises(u.UnitsError) as e:
         solarx, solary = myfunc_args(1*u.arcsec, 100*u.km)
-    assert str(e.value) == "Argument 'solary' to function 'myfunc_args' must be in units convertable to 'deg'."
+    assert str(e.value) == "Argument 'solary' to function 'myfunc_args' must be in units convertible to 'deg'."
     """
 
 
@@ -201,7 +201,7 @@ def test_kwarg_wrong_unit3():
 
     with pytest.raises(u.UnitsError) as e:
         solarx, solary = myfunc_args(1*u.arcsec, solary=100*u.km)
-    assert str(e.value) == "Argument 'solary' to function 'myfunc_args' must be in units convertable to 'deg'."
+    assert str(e.value) == "Argument 'solary' to function 'myfunc_args' must be in units convertible to 'deg'."
     """
 
 

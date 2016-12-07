@@ -101,10 +101,8 @@ def raises(*exceptions):
                 func(*arg, **kw)
             except exceptions:
                 pass
-            except:
-                raise
             else:
-                message = "%s() did not raise %s" % (name, valid)
+                message = "{}() did not raise {}".format(name, valid)
                 raise AssertionError(message)
         newfunc = make_decorator(func)(newfunc)
         return newfunc

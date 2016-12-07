@@ -62,6 +62,10 @@ def match_coordinates_3d(matchcoord, catalogcoord, nthneighbor=1, storekdtree='_
     This function requires `SciPy <http://www.scipy.org>`_ to be installed
     or it will fail.
     """
+    if catalogcoord.isscalar or len(catalogcoord) < 1:
+        raise ValueError('The catalog for coordinate matching cannot be a '
+                         'scalar or length-0.')
+
     kdt = _get_cartesian_kdtree(catalogcoord, storekdtree)
 
     #make sure coordinate systems match
@@ -130,6 +134,9 @@ def match_coordinates_sky(matchcoord, catalogcoord, nthneighbor=1, storekdtree='
     This function requires `SciPy <http://www.scipy.org>`_ to be installed
     or it will fail.
     """
+    if catalogcoord.isscalar or len(catalogcoord) < 1:
+        raise ValueError('The catalog for coordinate matching cannot be a '
+                         'scalar or length-0.')
 
     # send to catalog frame
     newmatch = matchcoord.transform_to(catalogcoord)
@@ -198,7 +205,7 @@ def search_around_3d(coords1, coords2, distlimit, storekdtree='_kdtree_3d'):
         and ``idx2``.
     dist3d : `~astropy.units.Quantity`
         The 3D distance between the coordinates. Shape matches ``idx1`` and
-        ``idx2``.
+        ``idx2``. The unit is that of ``coords1``.
 
     Notes
     -----
@@ -226,6 +233,12 @@ def search_around_3d(coords1, coords2, distlimit, storekdtree='_kdtree_3d'):
                          '``coord1.separation_3d(coord2) < distlimit`` to find '
                          'the coordinates near a scalar coordinate.')
 
+    if len(coords1) == 0 or len(coords2) == 0:
+        # Empty array input: return empty match
+        return (np.array([], dtype=np.int), np.array([], dtype=np.int),
+                u.Quantity([], u.deg),
+                u.Quantity([], coords1.distance.unit))
+
     kdt2 = _get_cartesian_kdtree(coords2, storekdtree)
     cunit = coords2.cartesian.x.unit
 
@@ -245,12 +258,12 @@ def search_around_3d(coords1, coords2, distlimit, storekdtree='_kdtree_3d'):
         for match in matches:
             idxs1.append(i)
             idxs2.append(match)
-    idxs1 = np.array(idxs1)
-    idxs2 = np.array(idxs2)
+    idxs1 = np.array(idxs1, dtype=np.int)
+    idxs2 = np.array(idxs2, dtype=np.int)
 
     if idxs1.size == 0:
         d2ds = u.Quantity([], u.deg)
-        d3ds = u.Quantity([], u.dimensionless_unscaled)
+        d3ds = u.Quantity([], coords1.distance.unit)
     else:
         d2ds = coords1[idxs1].separation(coords2[idxs2])
         d3ds = coords1[idxs1].separation_3d(coords2[idxs2])
@@ -294,10 +307,11 @@ def search_around_sky(coords1, coords2, seplimit, storekdtree='_kdtree_sky'):
         The on-sky separation between the coordinates. Shape matches ``idx1``
         and ``idx2``.
     dist3d : `~astropy.units.Quantity`
-        The 3D distance between the coordinates. Shape matches ``idx1`` and
-        ``idx2``. If either ``coords1`` or ``coords2`` don't have a distance,
-        this is the 3D distance on the unit sphere, rather than a physical
-        distance.
+        The 3D distance between the coordinates. Shape matches ``idx1``
+        and ``idx2``; the unit is that of ``coords1``.
+        If either ``coords1`` or ``coords2`` don't have a distance,
+        this is the 3D distance on the unit sphere, rather than a
+        physical distance.
 
     Notes
     -----
@@ -320,6 +334,16 @@ def search_around_sky(coords1, coords2, seplimit, storekdtree='_kdtree_sky'):
                          'coordinates, not scalars.  Instead, use '
                          '``coord1.separation(coord2) < seplimit`` to find the '
                          'coordinates near a scalar coordinate.')
+
+    if len(coords1) == 0 or len(coords2) == 0:
+        # Empty array input: return empty match
+        if coords2.distance.unit == u.dimensionless_unscaled:
+            distunit = u.dimensionless_unscaled
+        else:
+            distunit = coords1.distance.unit
+        return (np.array([], dtype=np.int), np.array([], dtype=np.int),
+                u.Quantity([], u.deg),
+                u.Quantity([], distunit))
 
     # we convert coord1 to match coord2's frame.  We do it this way
     # so that if the conversion does happen, the KD tree of coord2 at least gets
@@ -354,14 +378,17 @@ def search_around_sky(coords1, coords2, seplimit, storekdtree='_kdtree_sky'):
         for match in matches:
             idxs1.append(i)
             idxs2.append(match)
-    idxs1 = np.array(idxs1)
-    idxs2 = np.array(idxs2)
+    idxs1 = np.array(idxs1, dtype=np.int)
+    idxs2 = np.array(idxs2, dtype=np.int)
 
     if idxs1.size == 0:
+        if coords2.distance.unit == u.dimensionless_unscaled:
+            distunit = u.dimensionless_unscaled
+        else:
+            distunit = coords1.distance.unit
         d2ds = u.Quantity([], u.deg)
-        d3ds = u.Quantity([], u.dimensionless_unscaled)
+        d3ds = u.Quantity([], distunit)
     else:
-
         d2ds = coords1[idxs1].separation(coords2[idxs2])
         try:
             d3ds = coords1[idxs1].separation_3d(coords2[idxs2])
@@ -386,7 +413,7 @@ def _get_cartesian_kdtree(coord, attrname_or_kdt='_kdtree', forceunit=None):
         If a string, will store the KD-Tree used for the computation
         in the ``coord``, as an attribute in ``coord`` with the
         provided name. If given as a KD-Tree, it will just be used directly.
-    forceunit: unit or None
+    forceunit : unit or None
         If a unit, the cartesian coordinates will convert to that unit before
         being put in the KD-Tree.  If None, whatever unit it's already in
         will be used
@@ -403,7 +430,7 @@ def _get_cartesian_kdtree(coord, attrname_or_kdt='_kdtree', forceunit=None):
     from scipy import spatial
     try:
         KDTree = spatial.cKDTree
-    except:
+    except Exception:
         warn('C-based KD tree not found, falling back on (much slower) '
              'python implementation')
         KDTree = spatial.KDTree

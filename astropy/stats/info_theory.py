@@ -16,12 +16,12 @@ __doctest_requires__ = {'bayesian_info_criterion_lsq': ['scipy'],
 
 
 def bayesian_info_criterion(log_likelihood, n_params, n_samples):
-    """ Computes the Bayesian Information Criterion (BIC) given the log of the
+    r""" Computes the Bayesian Information Criterion (BIC) given the log of the
     likelihood function evaluated at the estimated (or analytically derived)
     parameters, the number of parameters, and the number of samples.
 
     The BIC is usually applied to decide whether increasing the number of free
-    parameters (hence, increasing the model complexity) yeilds significantly
+    parameters (hence, increasing the model complexity) yields significantly
     better fittings. The decision is in favor of the model with the lowest
     BIC.
 
@@ -29,7 +29,7 @@ def bayesian_info_criterion(log_likelihood, n_params, n_samples):
 
     .. math::
 
-        \mathrm{BIC} = k \\ln(n) - 2L,
+        \mathrm{BIC} = k \ln(n) - 2L,
 
     in which :math:`n` is the sample size, :math:`k` is the number of free
     parameters, and :math:`L` is the log likelihood function of the model
@@ -115,7 +115,7 @@ def bayesian_info_criterion(log_likelihood, n_params, n_samples):
 
 
 def bayesian_info_criterion_lsq(ssr, n_params, n_samples):
-    """
+    r"""
     Computes the Bayesian Information Criterion (BIC) assuming that the
     observations come from a Gaussian distribution.
 
@@ -123,10 +123,10 @@ def bayesian_info_criterion_lsq(ssr, n_params, n_samples):
 
     .. math::
 
-        \mathrm{BIC} = n\\ln\\left(\\dfrac{\mathrm{SSR}}{n}\\right) + k\\ln(n)
+        \mathrm{BIC} = n\ln\left(\dfrac{\mathrm{SSR}}{n}\right) + k\ln(n)
 
     in which :math:`n` is the sample size, :math:`k` is the number of free
-    parameters and :math:`\mathrm{SSR}` stands for the sum of squared redisuals
+    parameters and :math:`\mathrm{SSR}` stands for the sum of squared residuals
     between model and data.
 
     This is applicable, for instance, when the parameters of a model are
@@ -152,7 +152,7 @@ def bayesian_info_criterion_lsq(ssr, n_params, n_samples):
     modeling webpage [3]_. There, two models (Box and Gaussian) were fitted to
     a source flux using the least squares statistic. However, the fittings
     themselves do not tell much about which model better represents this
-    hypotetical source. Therefore, we are going to apply to BIC in order to
+    hypothetical source. Therefore, we are going to apply to BIC in order to
     decide in favor of a model.
 
     >>> import numpy as np
@@ -199,7 +199,7 @@ def bayesian_info_criterion_lsq(ssr, n_params, n_samples):
 
 
 def akaike_info_criterion(log_likelihood, n_params, n_samples):
-    """
+    r"""
     Computes the Akaike Information Criterion (AIC).
 
     Like the Bayesian Information Criterion, the AIC is a measure of
@@ -222,7 +222,7 @@ def akaike_info_criterion(log_likelihood, n_params, n_samples):
 
     .. math::
 
-        \mathrm{AIC} = 2(k - L) + \\dfrac{2k(k+1)}{n - k - 1}
+        \mathrm{AIC} = 2(k - L) + \dfrac{2k(k+1)}{n - k - 1}
 
     Rule of thumb [1]_:
 
@@ -305,7 +305,7 @@ def akaike_info_criterion(log_likelihood, n_params, n_samples):
 
 
 def akaike_info_criterion_lsq(ssr, n_params, n_samples):
-    """
+    r"""
     Computes the Akaike Information Criterion assuming that the observations
     are Gaussian distributed.
 
@@ -313,19 +313,19 @@ def akaike_info_criterion_lsq(ssr, n_params, n_samples):
 
     .. math::
 
-        \mathrm{AIC} = n\\ln\\left(\\dfrac{\mathrm{SSR}}{n}\\right) + 2k
+        \mathrm{AIC} = n\ln\left(\dfrac{\mathrm{SSR}}{n}\right) + 2k
 
     In case that the sample size is not "large enough", a correction is
     applied, i.e.
 
     .. math::
 
-        \mathrm{AIC} = n\\ln\\left(\\dfrac{\mathrm{SSR}}{n}\\right) + 2k +
-                       \\dfrac{2k(k+1)}{n-k-1}
+        \mathrm{AIC} = n\ln\left(\dfrac{\mathrm{SSR}}{n}\right) + 2k +
+                       \dfrac{2k(k+1)}{n-k-1}
 
 
     in which :math:`n` is the sample size, :math:`k` is the number of free
-    parameters and :math:`\mathrm{SSR}` stands for the sum of squared redisuals
+    parameters and :math:`\mathrm{SSR}` stands for the sum of squared residuals
     between model and data.
 
     This is applicable, for instance, when the parameters of a model are

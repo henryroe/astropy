@@ -65,7 +65,7 @@ def _probably_html(table, maxchars=100000):
                 if size > maxchars:
                     break
             table = os.linesep.join(table[:i+1])
-        except:
+        except Exception:
             pass
 
     if isinstance(table, six.string_types):
@@ -289,7 +289,7 @@ def read(table, guess=None, **kwargs):
                     table = fileobj.read()
             except ValueError:  # unreadable or invalid binary file
                 raise
-            except:
+            except Exception:
                 pass
             else:
                 # Ensure that `table` has at least one \r or \n in it
@@ -481,7 +481,7 @@ def _guess(table, read_kwargs, format, fast_reader):
                 reader_repr = repr(kwargs.get('Reader', basic.Basic))
                 keys_vals = ['Reader:' + re.search(r"\.(\w+)'>", reader_repr).group(1)]
                 kwargs_sorted = ((key, kwargs[key]) for key in sorted_keys)
-                keys_vals.extend(['%s: %s' % (key, repr(val)) for key, val in kwargs_sorted])
+                keys_vals.extend(['{}: {}'.format(key, repr(val)) for key, val in kwargs_sorted])
                 lines.append(' '.join(keys_vals))
 
             msg = ['',
@@ -564,7 +564,7 @@ def _get_guess_kwargs_list(read_kwargs):
     for Reader in (fastbasic.FastCommentedHeader, basic.CommentedHeader,
                    fastbasic.FastBasic, basic.Basic,
                    fastbasic.FastNoHeader, basic.NoHeader):
-        for delimiter in ("|", ",", " ", "\s"):
+        for delimiter in ("|", ",", " ", r"\s"):
             for quotechar in ('"', "'"):
                 guess_kwargs_list.append(dict(
                     Reader=Reader, delimiter=delimiter, quotechar=quotechar))

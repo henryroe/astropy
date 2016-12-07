@@ -2,6 +2,7 @@
 
 from __future__ import print_function
 
+import bz2
 import gzip
 import os
 import shutil
@@ -20,6 +21,8 @@ from ..verify import _Verify, _ErrList, VerifyError, VerifyWarning
 from ....extern.six import string_types
 from ....utils import indent
 from ....utils.exceptions import AstropyUserWarning, AstropyDeprecationWarning
+from ....utils.decorators import deprecated_renamed_argument
+from ....extern.six.moves import range
 
 
 def fitsopen(name, mode='readonly', memmap=None, save_backup=False,
@@ -134,7 +137,7 @@ def fitsopen(name, mode='readonly', memmap=None, save_backup=False,
         kwargs['uint'] = conf.enable_uint
 
     if not name:
-        raise ValueError('Empty filename: %s' % repr(name))
+        raise ValueError('Empty filename: {}'.format(repr(name)))
 
     return HDUList.fromfile(name, mode, memmap, save_backup, cache, **kwargs)
 
@@ -173,8 +176,8 @@ class HDUList(list, _Verify):
 
         for idx, hdu in enumerate(hdus):
             if not isinstance(hdu, _BaseHDU):
-                raise TypeError(
-                      "Element %d in the HDUList input is not an HDU." % idx)
+                raise TypeError("Element {} in the HDUList input is "
+                                "not an HDU.".format(idx))
 
         super(HDUList, self).__init__(hdus)
 
@@ -217,16 +220,16 @@ class HDUList(list, _Verify):
                 raise ValueError('An element in the HDUList must be an HDU.')
             for item in hdu:
                 if not isinstance(item, _BaseHDU):
-                    raise ValueError('%s is not an HDU.' % item)
+                    raise ValueError('{} is not an HDU.'.format(item))
         else:
             if not isinstance(hdu, _BaseHDU):
-                raise ValueError('%s is not an HDU.' % hdu)
+                raise ValueError('{} is not an HDU.'.format(hdu))
 
         try:
             super(HDUList, self).__setitem__(_key, hdu)
         except IndexError:
-            raise IndexError('Extension %s is out of bound or not found.'
-                             % key)
+            raise IndexError('Extension {} is out of bound or not found.'
+                            .format(key))
         self._resize = True
         self._truncate = False
 
@@ -392,7 +395,7 @@ class HDUList(list, _Verify):
         """
 
         if not isinstance(hdu, _BaseHDU):
-            raise ValueError('%s is not an HDU.' % hdu)
+            raise ValueError('{} is not an HDU.'.format(hdu))
 
         num_hdus = len(self)
 
@@ -532,10 +535,10 @@ class HDUList(list, _Verify):
                 nfound += 1
 
         if (nfound == 0):
-            raise KeyError('Extension %s not found.' % repr(key))
+            raise KeyError('Extension {} not found.'.format(repr(key)))
         elif (nfound > 1):
-            raise KeyError('There are %d extensions of %s.'
-                           % (nfound, repr(key)))
+            raise KeyError('There are {} extensions of {}.'
+                          .format(nfound, repr(key)))
         else:
             return found
 
@@ -568,8 +571,8 @@ class HDUList(list, _Verify):
         """
 
         if self._file.mode not in ('append', 'update', 'ostream'):
-            warnings.warn("Flush for '%s' mode is not supported."
-                          % self._file.mode, AstropyUserWarning)
+            warnings.warn("Flush for '{}' mode is not supported."
+                         .format(self._file.mode), AstropyUserWarning)
             return
 
         if self._save_backup and self._file.mode in ('append', 'update'):
@@ -582,13 +585,13 @@ class HDUList(list, _Verify):
                 while os.path.exists(backup):
                     backup = filename + '.bak.' + str(idx)
                     idx += 1
-                warnings.warn('Saving a backup of %s to %s.' %
-                              (filename, backup), AstropyUserWarning)
+                warnings.warn('Saving a backup of {} to {}.'.format(
+                        filename, backup), AstropyUserWarning)
                 try:
                     shutil.copy(filename, backup)
                 except IOError as exc:
-                    raise IOError('Failed to save backup to destination %s: '
-                                  '%s' % (filename, exc))
+                    raise IOError('Failed to save backup to destination {}: '
+                                  '{}'.format(filename, exc))
 
         self.verify(option=output_verify)
 
@@ -639,7 +642,8 @@ class HDUList(list, _Verify):
                 n = hdr['NAXIS']
                 hdr.set('EXTEND', True, after='NAXIS' + str(n))
 
-    def writeto(self, fileobj, output_verify='exception', clobber=False,
+    @deprecated_renamed_argument('clobber', 'overwrite', '1.3')
+    def writeto(self, fileobj, output_verify='exception', overwrite=False,
                 checksum=False):
         """
         Write the `HDUList` to a new file.
@@ -657,8 +661,13 @@ class HDUList(list, _Verify):
             ``"silentfix"`` with ``"+ignore"``, ``+warn``, or ``+exception"
             (e.g. ``"fix+warn"``).  See :ref:`verify` for more info.
 
-        clobber : bool
-            When `True`, overwrite the output file if exists.
+        overwrite : bool, optional
+            If ``True``, overwrite the output file if it exists. Raises an
+            ``OSError`` (``IOError`` for Python 2) if ``False`` and the
+            output file exists. Default is ``False``.
+
+            .. versionchanged:: 1.3
+               ``overwrite`` replaces the deprecated ``clobber`` argument.
 
         checksum : bool
             When `True` adds both ``DATASUM`` and ``CHECKSUM`` cards
@@ -683,7 +692,7 @@ class HDUList(list, _Verify):
         # sensible mode to require is 'ostream'.  This can accept an open
         # file object that's open to write only, or in append/update modes
         # but only if the file doesn't exist.
-        fileobj = _File(fileobj, mode='ostream', clobber=clobber)
+        fileobj = _File(fileobj, mode='ostream', overwrite=overwrite)
         hdulist = self.fromfile(fileobj)
 
         for hdu in self:
@@ -749,10 +758,10 @@ class HDUList(list, _Verify):
         else:
             name = self._file.name
 
-        results = ['Filename: %s' % name,
+        results = ['Filename: {}'.format(name),
                    'No.    Name         Type      Cards   Dimensions   Format']
 
-        format = '%-3d  %-10s  %-11s  %5d   %-10s   %s   %s'
+        format = '{:3d}  {:10}  {:11}  {:5d}   {}   {}   {}'
         default = ('', '', 0, (), '', '')
         for idx, hdu in enumerate(self):
             summary = hdu._summary()
@@ -760,7 +769,7 @@ class HDUList(list, _Verify):
                 summary += default[len(summary):]
             summary = (idx,) + summary
             if output:
-                results.append(format % summary)
+                results.append(format.format(*summary))
             else:
                 results.append(summary)
 
@@ -857,11 +866,11 @@ class HDUList(list, _Verify):
                 # corrupted HDU
                 except (VerifyError, ValueError) as exc:
                     warnings.warn(
-                        'Error validating header for HDU #%d (note: Astropy '
-                        'uses zero-based indexing).\n%s\n'
+                        'Error validating header for HDU #{} (note: Astropy '
+                        'uses zero-based indexing).\n{}\n'
                         'There may be extra bytes after the last HDU or the '
-                        'file is corrupted.' %
-                        (len(hdulist), indent(str(exc))), VerifyWarning)
+                        'file is corrupted.'.format(
+                            len(hdulist), indent(str(exc))), VerifyWarning)
                     del exc
                     break
 
@@ -916,8 +925,9 @@ class HDUList(list, _Verify):
         # each element calls their own verify
         for idx, hdu in enumerate(self):
             if idx > 0 and (not isinstance(hdu, ExtensionHDU)):
-                err_text = ("HDUList's element %s is not an extension HDU." %
-                            str(idx))
+                err_text = ("HDUList's element {} is not an "
+                            "extension HDU.".format(str(idx)))
+
                 err = self.run_option(option, err_text=err_text, fixable=False)
                 errs.append(err)
 

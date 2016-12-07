@@ -11,6 +11,12 @@ import io
 import os
 import re
 import sys
+import warnings
+
+from . import AstropyDeprecationWarning
+
+ZEST_DEPRECATION = AstropyDeprecationWarning('The zest.releaser machinery in '
+               'astropy is deprecated and may be removed in a future version.')
 
 
 def prereleaser_middle(data):
@@ -19,6 +25,7 @@ def prereleaser_middle(data):
     zest.releaser already does this normally but it's a little inflexible about
     the format.
     """
+    warnings.warn(ZEST_DEPRECATION)
     _update_setup_py_version(data['new_version'])
 
 
@@ -30,6 +37,7 @@ def releaser_middle(data):
     distributions.  This is supposedly a workaround for a bug in Python 2.4,
     but we don't care about Python 2.4.
     """
+    warnings.warn(ZEST_DEPRECATION)
     from zest.releaser.git import Git
     from zest.releaser.release import Releaser
 
@@ -38,16 +46,16 @@ def releaser_middle(data):
     # version number
     def _my_create_tag(self, version):
         version = 'v' + version
-        msg = "Tagging %s" % (version,)
-        cmd = 'git tag -s %s -m "%s"' % (version, msg)
+        msg = "Tagging {}".format(version,)
+        cmd = 'git tag -s {} -m "{}"'.format(version, msg)
         if os.path.isdir('.git/svn'):
             print("\nEXPERIMENTAL support for git-svn tagging!\n")
             cur_branch = open('.git/HEAD').read().strip().split('/')[-1]
-            print("You are on branch %s." % (cur_branch,))
+            print("You are on branch {}.".format(cur_branch,))
             if cur_branch != 'master':
                 print("Only the master branch is supported for git-svn tagging.")
                 print("Please tag yourself.")
-                print("'git tag' needs to list tag named %s." % (version,))
+                print("'git tag' needs to list tag named {}.".format(version,))
                 sys.exit()
             cmd = [cmd]
             local_head = open('.git/refs/heads/master').read()
@@ -57,7 +65,7 @@ def releaser_middle(data):
                 # dcommit before local tagging
                 cmd.insert(0, 'git svn dcommit')
             # create tag in svn
-            cmd.append('git svn tag -m "%s" %s' % (msg, version))
+            cmd.append('git svn tag -m "{}" {}'.format(msg, version))
         return cmd
 
     # Similarly copied from zest.releaser to support use of 'v' in front
@@ -78,11 +86,12 @@ def releaser_middle(data):
                 print(os.system(cmd))
             else:
                 # all commands are needed in order to proceed normally
-                print("Please create a tag for %s yourself and rerun." % \
-                        (self.data['version'],))
+                print("Please create a tag for {} yourself and rerun.".format(
+                        self.data['version'],))
+
                 sys.exit()
         if not self.vcs.tag_exists('v' + self.data['version']):
-            print("\nFailed to create tag %s!" % (self.data['version'],))
+            print("\nFailed to create tag {}!".format(self.data['version'],))
             sys.exit()
 
     # Normally all this does is to return '--formats=zip', which is currently
@@ -235,6 +244,7 @@ def postreleaser_before(data):
     default: By default zest.releaser uses <version>.dev0.  We want just
     <version>.dev without the mysterious 0.
     """
+    warnings.warn(ZEST_DEPRECATION)
     data['dev_version_template'] = '%(new_version)s.dev'
     data['nothing_changed_yet'] = _NEW_CHANGELOG_TEMPLATE
 
@@ -244,6 +254,7 @@ def postreleaser_middle(data):
     postreleaser.middle hook to update the setup.py with the new version. See
     prereleaser_middle for more details.
     """
+    warnings.warn(ZEST_DEPRECATION)
     _update_setup_py_version(data['dev_version'])
 
 

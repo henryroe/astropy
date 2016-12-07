@@ -55,6 +55,7 @@ explanation of all the different formats.
 """
 
 
+import operator
 import os
 import warnings
 
@@ -71,13 +72,13 @@ from .fitsrec import FITS_rec
 from ...units.format.fits import UnitScaleError
 from ...extern import six
 from ...extern.six import string_types
-from ...utils import deprecated
 from ...utils.exceptions import AstropyUserWarning
+from ...utils.decorators import deprecated_renamed_argument
 
 
 __all__ = ['getheader', 'getdata', 'getval', 'setval', 'delval', 'writeto',
-           'append', 'update', 'info', 'tdump', 'tcreate', 'tabledump',
-           'tableload', 'table_to_hdu']
+           'append', 'update', 'info', 'tabledump', 'tableload',
+           'table_to_hdu']
 
 
 def getheader(filename, *args, **kwargs):
@@ -105,9 +106,11 @@ def getheader(filename, *args, **kwargs):
 
     mode, closed = _get_file_mode(filename)
     hdulist, extidx = _getext(filename, mode, *args, **kwargs)
-    hdu = hdulist[extidx]
-    header = hdu.header
-    hdulist.close(closed=not closed)
+    try:
+        hdu = hdulist[extidx]
+        header = hdu.header
+    finally:
+        hdulist.close(closed=closed)
     return header
 
 
@@ -189,26 +192,28 @@ def getdata(filename, *args, **kwargs):
     view = kwargs.pop('view', None)
 
     hdulist, extidx = _getext(filename, mode, *args, **kwargs)
-    hdu = hdulist[extidx]
-    data = hdu.data
-    if data is None and extidx == 0:
-        try:
-            hdu = hdulist[1]
-            data = hdu.data
-        except IndexError:
+    try:
+        hdu = hdulist[extidx]
+        data = hdu.data
+        if data is None and extidx == 0:
+            try:
+                hdu = hdulist[1]
+                data = hdu.data
+            except IndexError:
+                raise IndexError('No data in this HDU.')
+        if data is None:
             raise IndexError('No data in this HDU.')
-    if data is None:
-        raise IndexError('No data in this HDU.')
-    if header:
-        hdr = hdu.header
-    hdulist.close(closed=not closed)
+        if header:
+            hdr = hdu.header
+    finally:
+        hdulist.close(closed=closed)
 
     # Change case of names if requested
     trans = None
     if lower:
-        trans = lambda s: s.lower()
+        trans = operator.methodcaller('lower')
     elif upper:
-        trans = lambda s: s.upper()
+        trans = operator.methodcaller('upper')
     if trans:
         if data.dtype.names is None:
             # this data does not have fields
@@ -330,11 +335,14 @@ def setval(filename, keyword, *args, **kwargs):
     after = kwargs.pop('after', None)
     savecomment = kwargs.pop('savecomment', False)
 
+    closed = fileobj_closed(filename)
     hdulist, extidx = _getext(filename, 'update', *args, **kwargs)
-    if keyword in hdulist[extidx].header and savecomment:
-        comment = None
-    hdulist[extidx].header.set(keyword, value, comment, before, after)
-    hdulist.close()
+    try:
+        if keyword in hdulist[extidx].header and savecomment:
+            comment = None
+        hdulist[extidx].header.set(keyword, value, comment, before, after)
+    finally:
+        hdulist.close(closed=closed)
 
 
 def delval(filename, keyword, *args, **kwargs):
@@ -367,13 +375,17 @@ def delval(filename, keyword, *args, **kwargs):
     if 'do_not_scale_image_data' not in kwargs:
         kwargs['do_not_scale_image_data'] = True
 
+    closed = fileobj_closed(filename)
     hdulist, extidx = _getext(filename, 'update', *args, **kwargs)
-    del hdulist[extidx].header[keyword]
-    hdulist.close()
+    try:
+        del hdulist[extidx].header[keyword]
+    finally:
+        hdulist.close(closed=closed)
 
 
+@deprecated_renamed_argument('clobber', 'overwrite', '1.3')
 def writeto(filename, data, header=None, output_verify='exception',
-            clobber=False, checksum=False):
+            overwrite=False, checksum=False):
     """
     Create a new FITS file using the supplied data/header.
 
@@ -398,9 +410,13 @@ def writeto(filename, data, header=None, output_verify='exception',
         ``+warn``, or ``+exception" (e.g. ``"fix+warn"``).  See :ref:`verify`
         for more info.
 
-    clobber : bool, optional
-        If `True`, and if filename already exists, it will overwrite
-        the file.  Default is `False`.
+    overwrite : bool, optional
+        If ``True``, overwrite the output file if it exists. Raises an
+        ``OSError`` (``IOError`` for Python 2) if ``False`` and the
+        output file exists. Default is ``False``.
+
+        .. versionchanged:: 1.3
+           ``overwrite`` replaces the deprecated ``clobber`` argument.
 
     checksum : bool, optional
         If `True`, adds both ``DATASUM`` and ``CHECKSUM`` cards to the
@@ -410,7 +426,7 @@ def writeto(filename, data, header=None, output_verify='exception',
     hdu = _makehdu(data, header)
     if hdu.is_image and not isinstance(hdu, PrimaryHDU):
         hdu = PrimaryHDU(data, header=header)
-    hdu.writeto(filename, clobber=clobber, output_verify=output_verify,
+    hdu.writeto(filename, overwrite=overwrite, output_verify=output_verify,
                 checksum=checksum)
 
 
@@ -563,17 +579,21 @@ def append(filename, data, header=None, checksum=False, verify=True, **kwargs):
 
         if verify or not closed:
             f = fitsopen(filename, mode='append')
-            f.append(hdu)
+            try:
+                f.append(hdu)
 
-            # Set a flag in the HDU so that only this HDU gets a checksum when
-            # writing the file.
-            hdu._output_checksum = checksum
-            f.close(closed=not closed)
+                # Set a flag in the HDU so that only this HDU gets a checksum
+                # when writing the file.
+                hdu._output_checksum = checksum
+            finally:
+                f.close(closed=closed)
         else:
             f = _File(filename, mode='append')
-            hdu._output_checksum = checksum
-            hdu._writeto(f)
-            f.close()
+            try:
+                hdu._output_checksum = checksum
+                hdu._writeto(f)
+            finally:
+                f.close()
 
 
 def update(filename, data, *args, **kwargs):
@@ -629,9 +649,10 @@ def update(filename, data, *args, **kwargs):
     closed = fileobj_closed(filename)
 
     hdulist, _ext = _getext(filename, 'update', *args, **kwargs)
-    hdulist[_ext] = new_hdu
-
-    hdulist.close(closed=not closed)
+    try:
+        hdulist[_ext] = new_hdu
+    finally:
+        hdulist.close(closed=closed)
 
 
 def info(filename, output=None, **kwargs):
@@ -664,16 +685,18 @@ def info(filename, output=None, **kwargs):
         kwargs['ignore_missing_end'] = True
 
     f = fitsopen(filename, mode=mode, **kwargs)
-    ret = f.info(output=output)
-
-    if closed:
-        f.close()
+    try:
+        ret = f.info(output=output)
+    finally:
+        if closed:
+            f.close()
 
     return ret
 
 
+@deprecated_renamed_argument('clobber', 'overwrite', '1.3')
 def tabledump(filename, datafile=None, cdfile=None, hfile=None, ext=1,
-              clobber=False):
+              overwrite=False):
     """
     Dump a table HDU to a file in ASCII format.  The table may be
     dumped in three separate files, one containing column definitions,
@@ -701,14 +724,19 @@ def tabledump(filename, datafile=None, cdfile=None, hfile=None, ext=1,
         The number of the extension containing the table HDU to be
         dumped.
 
-    clobber : bool
-        Overwrite the output files if they exist.
+    overwrite : bool, optional
+        If ``True``, overwrite the output file if it exists. Raises an
+        ``OSError`` (``IOError`` for Python 2) if ``False`` and the
+        output file exists. Default is ``False``.
+
+        .. versionchanged:: 1.3
+           ``overwrite`` replaces the deprecated ``clobber`` argument.
 
     Notes
     -----
     The primary use for the `tabledump` function is to allow editing in a
     standard text editor of the table data and parameters.  The
-    ``tcreate`` function can be used to reassemble the table from the
+    `tableload` function can be used to reassemble the table from the
     three ASCII files.
     """
 
@@ -720,27 +748,21 @@ def tabledump(filename, datafile=None, cdfile=None, hfile=None, ext=1,
     f = fitsopen(filename, mode=mode)
 
     # Create the default data file name if one was not provided
+    try:
+        if not datafile:
+            # TODO: Really need to provide a better way to access the name of
+            # any files underlying an HDU
+            root, tail = os.path.splitext(f._HDUList__file.name)
+            datafile = root + '_' + repr(ext) + '.txt'
 
-    if not datafile:
-        # TODO: Really need to provide a better way to access the name of any
-        # files underlying an HDU
-        root, tail = os.path.splitext(f._HDUList__file.name)
-        datafile = root + '_' + repr(ext) + '.txt'
-
-    # Dump the data from the HDU to the files
-    f[ext].dump(datafile, cdfile, hfile, clobber)
-
-    if closed:
-        f.close()
+        # Dump the data from the HDU to the files
+        f[ext].dump(datafile, cdfile, hfile, overwrite)
+    finally:
+        if closed:
+            f.close()
 
 if isinstance(tabledump.__doc__, string_types):
     tabledump.__doc__ += BinTableHDU._tdump_file_format.replace('\n', '\n    ')
-
-
-@deprecated('0.1', alternative=':func:`tabledump`')
-def tdump(filename, datafile=None, cdfile=None, hfile=None, ext=1,
-          clobber=False):
-    tabledump(filename, datafile, cdfile, hfile, ext, clobber)
 
 
 def tableload(datafile, cdfile, hfile=None):
@@ -781,11 +803,6 @@ if isinstance(tableload.__doc__, string_types):
     tableload.__doc__ += BinTableHDU._tdump_file_format.replace('\n', '\n    ')
 
 
-@deprecated('0.1', alternative=':func:`tableload`')
-def tcreate(datafile, cdfile, hfile=None):
-    return tableload(datafile, cdfile, hfile)
-
-
 def _getext(filename, mode, *args, **kwargs):
     """
     Open the input file, return the `HDUList` and the extension.
@@ -798,9 +815,9 @@ def _getext(filename, mode, *args, **kwargs):
     extname = kwargs.pop('extname', None)
     extver = kwargs.pop('extver', None)
 
-    err_msg = ('Redundant/conflicting extension arguments(s): %s' %
-               ({'args': args, 'ext': ext,  'extname': extname,
-                 'extver': extver},))
+    err_msg = ('Redundant/conflicting extension arguments(s): {}'.format(
+            {'args': args, 'ext': ext,  'extname': extname,
+             'extver': extver}))
 
     # This code would be much simpler if just one way of specifying an
     # extension were picked.  But now we need to support all possible ways for
@@ -909,7 +926,7 @@ def _get_file_mode(filename, default='readonly'):
         mode = FILE_MODES.get(fmode)
         if mode is None:
             raise IOError(
-                "File mode of the input file object (%r) cannot be used to "
-                "read/write FITS files." % fmode)
+                "File mode of the input file object ({!r}) cannot be used to "
+                "read/write FITS files.".format(fmode))
 
     return mode, closed

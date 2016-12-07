@@ -41,7 +41,7 @@ def common_dtype(arrs):
 
     Parameters
     ----------
-    arrs: list of ndarray objects
+    arrs : list of ndarray objects
         Arrays for which to find the common dtype
     """
     def dtype(arr):
@@ -200,7 +200,7 @@ def _both_isinstance(left, right, cls):
 def _not_equal(left, right):
     try:
         return bool(left != right)
-    except:
+    except Exception:
         return True
 
 
@@ -240,7 +240,7 @@ def enable_merge_strategies(*merge_strategies):
       ...         return [left, right]
 
     By defining this class the merge strategy is automatically registered to be
-    available for use in merging. However, by default new merge stratgies are
+    available for use in merging. However, by default new merge strategies are
     *not enabled*.  This prevents inadvertently changing the behavior of
     unrelated code that is performing metadata merge operations.
 
@@ -272,7 +272,7 @@ def enable_merge_strategies(*merge_strategies):
 
     Parameters
     ----------
-    merge_strategies: one or more `~astropy.utils.metadata.MergeStrategy` args
+    merge_strategies : one or more `~astropy.utils.metadata.MergeStrategy` args
         Merge strategies that will be enabled.
 
     """
@@ -291,7 +291,7 @@ def merge(left, right, merge_func=None, metadata_conflicts='warn'):
 
     out = deepcopy(left)
 
-    for key, val in list(six.iteritems(right)):
+    for key, val in six.iteritems(right):
         # If no conflict then insert val into out dict and continue
         if key not in out:
             out[key] = deepcopy(val)

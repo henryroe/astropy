@@ -23,7 +23,7 @@ import astropy
 NAME = 'astropy'
 
 # VERSION should be PEP386 compatible (http://www.python.org/dev/peps/pep-0386)
-VERSION = '1.2.dev'
+VERSION = '1.3.dev'
 
 # Indicates if this version is a release version
 RELEASE = 'dev' not in VERSION
@@ -31,7 +31,7 @@ RELEASE = 'dev' not in VERSION
 if not RELEASE:
     VERSION += get_git_devstr(False)
 
-DOWNLOAD_BASE_URL = 'http://pypi.python.org/packages/source/a/astropy'
+DOWNLOAD_BASE_URL = 'https://pypi.python.org/packages/source/a/astropy'
 
 # Populate the dict of setup command overrides; this should be done before
 # invoking any other functionality from distutils since it can potentially
@@ -84,7 +84,7 @@ setup(name=NAME,
       license='BSD',
       url='http://astropy.org',
       long_description=astropy.__doc__,
-      download_url='%s/astropy-%s.tar.gz' % (DOWNLOAD_BASE_URL, VERSION),
+      download_url='{0}/astropy-{1}.tar.gz'.format(DOWNLOAD_BASE_URL, VERSION),
       keywords=['astronomy', 'astrophysics', 'cosmology', 'space', 'science',
                 'units', 'table', 'wcs', 'vo', 'samp', 'coordinate', 'fits',
                 'modeling', 'models', 'fitting', 'ascii'],
@@ -94,7 +94,6 @@ setup(name=NAME,
           'Operating System :: OS Independent',
           'Programming Language :: C',
           'Programming Language :: Cython',
-          'Programming Language :: Python :: 2.6',
           'Programming Language :: Python :: 2.7',
           'Programming Language :: Python :: 3',
           'Programming Language :: Python :: Implementation :: CPython',
@@ -105,5 +104,6 @@ setup(name=NAME,
       zip_safe=False,
       use_2to3=False,
       entry_points=entry_points,
+      python_requires='>=2.7',
       **package_info
 )
